@@ -15,21 +15,23 @@ from torch.utils.data import Dataset
 from loguru import logger
 import librosa
 
-# 47 BEAT joints (same order as DiffSHEG)
+# All 75 BEAT joints (full body including hands and legs)
 BEAT_JOINTS = [
-    "Spine", "Spine1", "Spine2", "Spine3", "Neck", "Neck1", "Head",
+    "Hips", "Spine", "Spine1", "Spine2", "Spine3", "Neck", "Neck1", "Head", "HeadEnd",
     "RightShoulder", "RightArm", "RightForeArm", "RightHand",
-    "RightHandMiddle1", "RightHandMiddle2", "RightHandMiddle3",
-    "RightHandRing", "RightHandRing1", "RightHandRing2", "RightHandRing3",
-    "RightHandPinky", "RightHandPinky1", "RightHandPinky2", "RightHandPinky3",
-    "RightHandIndex", "RightHandIndex1", "RightHandIndex2", "RightHandIndex3",
-    "RightHandThumb1", "RightHandThumb2", "RightHandThumb3",
+    "RightHandMiddle1", "RightHandMiddle2", "RightHandMiddle3", "RightHandMiddle4",
+    "RightHandRing", "RightHandRing1", "RightHandRing2", "RightHandRing3", "RightHandRing4",
+    "RightHandPinky", "RightHandPinky1", "RightHandPinky2", "RightHandPinky3", "RightHandPinky4",
+    "RightHandIndex", "RightHandIndex1", "RightHandIndex2", "RightHandIndex3", "RightHandIndex4",
+    "RightHandThumb1", "RightHandThumb2", "RightHandThumb3", "RightHandThumb4",
     "LeftShoulder", "LeftArm", "LeftForeArm", "LeftHand",
-    "LeftHandMiddle1", "LeftHandMiddle2", "LeftHandMiddle3",
-    "LeftHandRing", "LeftHandRing1", "LeftHandRing2", "LeftHandRing3",
-    "LeftHandPinky", "LeftHandPinky1", "LeftHandPinky2", "LeftHandPinky3",
-    "LeftHandIndex", "LeftHandIndex1", "LeftHandIndex2", "LeftHandIndex3",
-    "LeftHandThumb1", "LeftHandThumb2", "LeftHandThumb3",
+    "LeftHandMiddle1", "LeftHandMiddle2", "LeftHandMiddle3", "LeftHandMiddle4",
+    "LeftHandRing", "LeftHandRing1", "LeftHandRing2", "LeftHandRing3", "LeftHandRing4",
+    "LeftHandPinky", "LeftHandPinky1", "LeftHandPinky2", "LeftHandPinky3", "LeftHandPinky4",
+    "LeftHandIndex", "LeftHandIndex1", "LeftHandIndex2", "LeftHandIndex3", "LeftHandIndex4",
+    "LeftHandThumb1", "LeftHandThumb2", "LeftHandThumb3", "LeftHandThumb4",
+    "RightUpLeg", "RightLeg", "RightFoot", "RightForeFoot", "RightToeBase", "RightToeBaseEnd",
+    "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftForeFoot", "LeftToeBase", "LeftToeBaseEnd",
 ]
 
 # ARKit 51 blendshape names
@@ -165,10 +167,10 @@ class BEATRawArkitDataset(Dataset):
         self.stride = getattr(args, 'stride', 10)
         self.speakers = getattr(args, 'training_speakers', [2])
 
-        # Output dimensions (matching DiffSHEG)
-        self.body_dim = 141  # 47 joints * 3 axis-angle
+        # Output dimensions (full body BVH + ARKit face)
+        self.body_dim = 225  # 75 joints * 3 axis-angle
         self.face_dim = 51   # ARKit blendshapes
-        self.total_dim = self.body_dim + self.face_dim  # 192
+        self.total_dim = self.body_dim + self.face_dim  # 276
 
         # Load or build cache
         self.cache_path = getattr(args, 'cache_path', './datasets/beat_cache/beat_raw_arkit/')

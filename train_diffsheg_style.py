@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Train gesture model with DiffSHEG-compatible output format.
-Output: 192 dims = 141 body (47 joints axis-angle) + 51 face (ARKit blendshapes)
+Train gesture model with full body BVH + ARKit face output.
+Output: 276 dims = 225 body (75 joints axis-angle) + 51 face (ARKit blendshapes)
 
-This outputs the EXACT same format as DiffSHEG, so it works directly with
-your existing Unity receiver.
+Full body motion including upper body, hands, and legs.
 """
 import os
 import sys
@@ -268,7 +267,7 @@ def train(args):
 
     # Model
     model = TransformerDenoiser(
-        motion_dim=192,  # 141 body + 51 face
+        motion_dim=276,  # 225 body (75 joints) + 51 face
         audio_dim=128,   # Mel spectrogram
         hidden_dim=512,
         num_layers=8,
@@ -344,8 +343,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("DiffSHEG-Style Training")
-    logger.info("Output format: 192 dims (141 body + 51 face)")
+    logger.info("Full Body BVH + ARKit Face Training")
+    logger.info("Output format: 276 dims (225 body [75 joints] + 51 face)")
     logger.info("=" * 60)
     logger.info(f"Data path: {args.data_path}")
     logger.info(f"Speakers: {args.speakers}")
