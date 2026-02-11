@@ -1,0 +1,91 @@
+# MeanFlow config for ARKit 51-blendshape face output
+# Train with: python meanflow_trainer.py -c configs/meanflow_arkit.yaml
+
+is_train: True
+ddp: False
+stat: ts
+root_path: ./
+out_path: ./outputs/meanflow_arkit/
+project: meanflow_arkit
+
+# Model weights
+e_path: weights/AESKConv_240_100.bin
+eval_model: motion_representation
+e_name: VAESKConv
+
+# Data paths
+data_path: ./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1/
+data_path_1: ./datasets/hub/
+pose_norm: True
+
+# Model config
+cfg: configs/mf_arkit_model_config.yaml
+
+# Normalization paths
+mean_pose_path: ./mean_std/beatx_2_330_mean.npy
+std_pose_path: ./mean_std/beatx_2_330_std.npy
+mean_trans_path: ./mean_std/beatx_2_trans_mean.npy
+std_trans_path: ./mean_std/beatx_2_trans_std.npy
+
+# VQ-VAE paths (body)
+vqvae_upper_path: ./ckpt/net_300000_upper.pth
+vqvae_hands_path: ./ckpt/net_300000_hands.pth
+vqvae_lower_path: ./ckpt/net_300000_lower.pth
+
+# Face VQ-VAE (ARKit 51-dim) - NEEDS TO BE TRAINED FIRST
+vqvae_face_path: ./ckpt/face_arkit_51.pth
+
+# VQ settings
+vqvae_squeeze_scale: 4
+vqvae_latent_scale: 5
+use_trans: True
+
+# Data config
+training_speakers: [2]
+additional_data: False
+cache_path: datasets/beat_cache/beat_arkit_51/
+dataset: beat_arkit
+new_cache: True
+
+# Motion config
+ori_joints: beat_smplx_joints
+tar_joints: beat_smplx_full
+pose_rep: smplxflame_30
+pose_fps: 30
+rot6d: True
+pre_frames: 4
+pose_dims: 330
+pose_length: 128
+stride: 20
+test_length: 128
+
+# Audio config
+audio_rep: onset+amplitude
+audio_sr: 16000
+audio_fps: 16000
+audio_norm: False
+audio_f: 256
+
+# Word/text config
+word_rep: textgrid
+word_dims: 300
+t_pre_encoder: fasttext
+
+# Face config - ARKit 51 blendshapes!
+facial_rep: arkit_51
+facial_dims: 51
+facial_norm: False
+facial_f: 0
+
+# Speaker config
+id_rep: onehot
+speaker_f: 0
+
+# Training config
+batch_size: 128
+lr_base: 1e-4
+trainer: meanflow_arkit
+rec_weight: 1
+grad_norm: 0.99
+epochs: 500
+test_period: 20

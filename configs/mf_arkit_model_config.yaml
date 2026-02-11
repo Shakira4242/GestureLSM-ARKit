@@ -1,0 +1,54 @@
+# MeanFlow model config with ARKit face support (use_exp: True)
+
+model:
+  model_name: MeanFlow
+  g_name: GestureMF
+  do_classifier_free_guidance: False
+  cfg_omega: 0.5
+  cfg_kappa: 0.5
+  adaptive_p: 1.0
+  n_steps: 1
+  use_exp: True  # Enable face output!
+  flow_mode: "v"
+  guidance_scale: 1.0
+  weighting: "adaptive"
+  path_type: "linear"  # MeanFlow uses linear interpolation
+  noise_dist: "logit_normal"
+  data_proportion: 0.25  # rate_same parameter
+  cfg_min_t: 0.0
+  cfg_max_t: 0.9
+  time_mu: -0.4  # p_mean for logit-normal
+  time_sigma: 1.0  # p_std for logit-normal
+  time_min: 0.0
+  time_max: 1.0
+
+  denoiser:
+    target: models.denoiser.GestureDenoiser
+    params:
+      input_dim: 128
+      latent_dim: 256
+      ff_size: 1024
+      num_layers: 8
+      num_heads: 4
+      dropout: 0.1
+      activation: "gelu"
+      n_seed: 8
+      seq_len: 32
+      flip_sin_to_cos: True
+      freq_shift: 0.0
+      cond_proj_dim: 256
+      use_exp: True  # 4 body parts: upper, hands, lower, face
+
+  modality_encoder:
+    target: models.layers.modality_encoder.ModalityEncoder
+    params:
+      data_path: ./
+      t_fix_pre: False
+      audio_dim: 256
+      audio_in: 2
+      raw_audio: False
+      latent_dim: 256
+      audio_fps: 30
+      target_length: 128
+      spatial_temporal: True
+      use_exp: True  # Enable face modality

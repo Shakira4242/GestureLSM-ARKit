@@ -1,0 +1,49 @@
+# Model config for Diffusion with ARKit face support
+model:
+  model_name: GestureDiffuse
+  g_name: GestureDiffusion
+  do_classifier_free_guidance: False
+  guidance_scale: 1.5
+  use_arkit_face: True  # Enable ARKit face output
+
+  denoiser:
+    target: models.denoiser.GestureDenoiser
+    params:
+      input_dim: 128
+      latent_dim: 256
+      ff_size: 1024
+      num_layers: 8
+      num_heads: 4
+      dropout: 0.1
+      activation: "gelu"
+      n_seed: 8
+      flip_sin_to_cos: True
+      freq_shift: 0.0
+      use_exp: True  # 4 body parts: upper, hands, lower, face
+
+  modality_encoder:
+    target: models.modality_encoder.ModalityEncoder
+    params:
+      data_path: ./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1/
+      t_fix_pre: False
+      audio_dim: 256
+      audio_in: 2
+      raw_audio: False
+      latent_dim: 256
+      audio_fps: 30
+      use_exp: True
+
+  scheduler:
+    target: diffusers.DDIMScheduler
+    num_inference_steps: 20
+    eta: 0.0
+    params:
+      num_train_timesteps: 1000
+      beta_start: 0.00085
+      beta_end: 0.012
+      beta_schedule: 'squaredcos_cap_v2'
+      prediction_type: 'sample'
+      clip_sample: false
+      timestep_spacing: 'leading'
+      set_alpha_to_one: True
+      steps_offset: 0
