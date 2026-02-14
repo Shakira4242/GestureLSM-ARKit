@@ -56,39 +56,36 @@ speakers = [int(s) for s in "$BEAT_SPEAKERS".split()]
 
 try:
     # Download the dataset from HuggingFace
-    print("Downloading BEAT dataset from HuggingFace...")
+    print("Downloading BEAT dataset from H-Liu1997/BEAT...")
     print("This may take a while...")
 
+    # Download entire dataset first
+    snapshot_download(
+        repo_id="H-Liu1997/BEAT",
+        repo_type="dataset",
+        local_dir="./datasets/BEAT_download/",
+    )
+
+    # Move speaker folders to correct location
+    os.makedirs(dataset_path, exist_ok=True)
     for speaker in speakers:
-        speaker_dir = os.path.join(dataset_path, str(speaker))
-        if os.path.exists(speaker_dir):
-            print(f"Speaker {speaker} already exists, skipping...")
-            continue
+        src = f"./datasets/BEAT_download/beat_english_v0.2.1/{speaker}"
+        dst = os.path.join(dataset_path, str(speaker))
+        if os.path.exists(src) and not os.path.exists(dst):
+            os.system(f"mv '{src}' '{dst}'")
+            print(f"Speaker {speaker} ready!")
+        elif os.path.exists(dst):
+            print(f"Speaker {speaker} already exists")
+        else:
+            print(f"Speaker {speaker} not found in download")
 
-        print(f"Downloading speaker {speaker}...")
-        try:
-            # Try downloading from beat2 backup
-            snapshot_download(
-                repo_id="beat2/beat_v2.0.0_backup",
-                repo_type="dataset",
-                local_dir="./datasets/temp_beat/",
-                allow_patterns=[f"beat_english_v2.0.0/{speaker}/*"],
-            )
-
-            # Move to correct location
-            src = f"./datasets/temp_beat/beat_english_v2.0.0/{speaker}"
-            if os.path.exists(src):
-                os.makedirs(dataset_path, exist_ok=True)
-                os.system(f"mv '{src}' '{speaker_dir}'")
-                print(f"Speaker {speaker} downloaded!")
-        except Exception as e:
-            print(f"Could not download speaker {speaker}: {e}")
+    print("Dataset download complete!")
 
 except Exception as e:
     print(f"Download failed: {e}")
     print("")
-    print("Please download BEAT v0.2.1 manually from:")
-    print("  https://pantomatrix.github.io/BEAT/")
+    print("Please download BEAT manually from:")
+    print("  https://huggingface.co/datasets/H-Liu1997/BEAT")
     print("")
     print("Extract to: $DATASET_PATH")
 EOF
