@@ -493,8 +493,9 @@ class CustomTrainer(BaseTrainer):
         rec_all_body = torch.cat(rec_all_body, dim=1) * self.cfg.vqvae_latent_scale
         rec_all_face = torch.cat(rec_all_face, dim=1) * self.cfg.vqvae_latent_scale
 
-        rec_body = self.vq_model_body.latent2origin(rec_all_body)[0]
-        rec_face = self.vq_model_face.latent2origin(rec_all_face)[0]
+        # latent2origin returns (B, dim, T), permute to (B, T, dim)
+        rec_body = self.vq_model_body.latent2origin(rec_all_body)[0].permute(0, 2, 1)
+        rec_face = self.vq_model_face.latent2origin(rec_all_face)[0].permute(0, 2, 1)
 
         # Denormalize
         rec_body = rec_body * self.std_body + self.mean_body
