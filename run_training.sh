@@ -27,8 +27,11 @@ DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 # Step 0: Install dependencies
 echo ""
 echo "[Step 0] Installing dependencies..."
+apt-get update && apt-get install -y git-lfs > /dev/null 2>&1 || true
+git lfs install > /dev/null 2>&1 || true
+
 # PyTorch 2.1 should already be installed on RunPod template
-pip install -q omegaconf loguru wandb librosa smplx scipy tqdm matplotlib huggingface_hub pyyaml
+pip install -q omegaconf loguru wandb librosa smplx scipy tqdm matplotlib huggingface_hub pyyaml einops
 
 # Step 1: Check/download dataset
 echo ""
@@ -37,58 +40,41 @@ echo "[Step 1] Checking dataset..."
 # Check if all speaker directories exist
 MISSING_SPEAKERS=""
 for speaker in $BEAT_SPEAKERS; do
-    if [ ! -d "$DATASET_PATH/$speaker" ]; then
+    if [ ! -d "$DATASET_PATH/$speaker" ] || [ $(du -s "$DATASET_PATH/$speaker" 2>/dev/null | cut -f1) -lt 100000 ]; then
         MISSING_SPEAKERS="$MISSING_SPEAKERS $speaker"
     fi
 done
 
 if [ -n "$MISSING_SPEAKERS" ]; then
-    echo "Missing speaker directories:$MISSING_SPEAKERS"
+    echo "Missing or incomplete speaker directories:$MISSING_SPEAKERS"
     echo ""
-    echo "Attempting to download from HuggingFace..."
+    echo "Downloading from HuggingFace using git-lfs..."
 
-    python3 << EOF
-import os
-from huggingface_hub import snapshot_download
+    # Clone if not exists
+    if [ ! -d "./datasets/BEAT_download/.git" ]; then
+        rm -rf ./datasets/BEAT_download
+        git clone https://huggingface.co/datasets/H-Liu1997/BEAT ./datasets/BEAT_download/
+    fi
 
-dataset_path = "$DATASET_PATH"
-speakers = [int(s) for s in "$BEAT_SPEAKERS".split()]
+    cd ./datasets/BEAT_download
 
-try:
-    # Download the dataset from HuggingFace
-    print("Downloading BEAT dataset from H-Liu1997/BEAT...")
-    print("This may take a while...")
+    # Pull each missing speaker
+    for speaker in $MISSING_SPEAKERS; do
+        echo "Downloading speaker $speaker..."
+        git lfs pull --include="beat_english_v0.2.1/beat_english_v0.2.1/$speaker/*" || true
+    done
 
-    # Download entire dataset first
-    snapshot_download(
-        repo_id="H-Liu1997/BEAT",
-        repo_type="dataset",
-        local_dir="./datasets/BEAT_download/",
-    )
+    cd /workspace/GestureLSM-ARKit
 
-    # Move speaker folders to correct location
-    os.makedirs(dataset_path, exist_ok=True)
-    for speaker in speakers:
-        src = f"./datasets/BEAT_download/beat_english_v0.2.1/{speaker}"
-        dst = os.path.join(dataset_path, str(speaker))
-        if os.path.exists(src) and not os.path.exists(dst):
-            os.system(f"mv '{src}' '{dst}'")
-            print(f"Speaker {speaker} ready!")
-        elif os.path.exists(dst):
-            print(f"Speaker {speaker} already exists")
-        else:
-            print(f"Speaker {speaker} not found in download")
+    # Move to correct location
+    mkdir -p "$DATASET_PATH"
+    for speaker in $MISSING_SPEAKERS; do
+        if [ -d "./datasets/BEAT_download/beat_english_v0.2.1/beat_english_v0.2.1/$speaker" ]; then
+            mv "./datasets/BEAT_download/beat_english_v0.2.1/beat_english_v0.2.1/$speaker" "$DATASET_PATH/" 2>/dev/null || true
+        fi
+    done
 
-    print("Dataset download complete!")
-
-except Exception as e:
-    print(f"Download failed: {e}")
-    print("")
-    print("Please download BEAT manually from:")
-    print("  https://huggingface.co/datasets/H-Liu1997/BEAT")
-    print("")
-    print("Extract to: $DATASET_PATH")
-EOF
+    echo "Dataset download complete!"
 fi
 
 # Verify at least one speaker exists
