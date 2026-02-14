@@ -7,6 +7,8 @@
 # 3. Shortcut generator (audio -> motion)
 #
 # Usage: bash run_training.sh
+#
+# Optimized for H100 (80GB VRAM) with PyTorch 2.1
 
 set -e  # Exit on error
 
@@ -14,85 +16,112 @@ echo "=========================================="
 echo "GestureLSM BVH + ARKit Training Pipeline"
 echo "=========================================="
 
-# Configuration
-BEAT_SPEAKERS="2"  # Which speakers to train on (comma-separated, e.g., "1,2,3")
+# Configuration - optimized for H100
+BEAT_SPEAKERS="1 2 3 4"      # Train on 4 speakers
 VQVAE_EPOCHS=100
 GENERATOR_EPOCHS=500
-BATCH_SIZE=128
+VQVAE_BATCH_SIZE=256         # H100 can handle larger batches
+GENERATOR_BATCH_SIZE=256     # H100 80GB VRAM
+DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 
 # Step 0: Install dependencies
 echo ""
 echo "[Step 0] Installing dependencies..."
-pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install -q omegaconf loguru wandb librosa smplx scipy tqdm matplotlib
+# PyTorch 2.1 should already be installed on RunPod template
+pip install -q omegaconf loguru wandb librosa smplx scipy tqdm matplotlib huggingface_hub pyyaml
 
 # Step 1: Check/download dataset
 echo ""
 echo "[Step 1] Checking dataset..."
-DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 
-if [ ! -d "$DATASET_PATH/2" ]; then
-    echo "Dataset not found. Please download BEAT v0.2.1 from:"
-    echo "  https://pantomatrix.github.io/BEAT/"
-    echo ""
-    echo "And extract to: $DATASET_PATH"
-    echo ""
-    echo "Directory structure should be:"
-    echo "  $DATASET_PATH/2/2_scott_0_1_1.bvh"
-    echo "  $DATASET_PATH/2/2_scott_0_1_1.json"
-    echo "  $DATASET_PATH/2/2_scott_0_1_1.wav"
-    echo ""
+# Check if all speaker directories exist
+MISSING_SPEAKERS=""
+for speaker in $BEAT_SPEAKERS; do
+    if [ ! -d "$DATASET_PATH/$speaker" ]; then
+        MISSING_SPEAKERS="$MISSING_SPEAKERS $speaker"
+    fi
+done
 
-    # Try to download sample data from HuggingFace
-    echo "Attempting to download sample data from HuggingFace..."
-    mkdir -p "$DATASET_PATH/2"
+if [ -n "$MISSING_SPEAKERS" ]; then
+    echo "Missing speaker directories:$MISSING_SPEAKERS"
+    echo ""
+    echo "Attempting to download from HuggingFace..."
 
-    pip install -q huggingface_hub
-    python3 << 'EOF'
+    python3 << EOF
 import os
-from huggingface_hub import hf_hub_download
+from huggingface_hub import snapshot_download
 
-dataset_path = "./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1/2"
+dataset_path = "$DATASET_PATH"
+speakers = [int(s) for s in "$BEAT_SPEAKERS".split()]
 
 try:
-    # Download one sample file for testing
-    for ext in ['.bvh', '.json', '.wav']:
-        filename = f"2_scott_0_1_1{ext}"
+    # Download the dataset from HuggingFace
+    print("Downloading BEAT dataset from HuggingFace...")
+    print("This may take a while...")
+
+    for speaker in speakers:
+        speaker_dir = os.path.join(dataset_path, str(speaker))
+        if os.path.exists(speaker_dir):
+            print(f"Speaker {speaker} already exists, skipping...")
+            continue
+
+        print(f"Downloading speaker {speaker}...")
         try:
-            path = hf_hub_download(
+            # Try downloading from beat2 backup
+            snapshot_download(
                 repo_id="beat2/beat_v2.0.0_backup",
-                filename=f"beat_english_v2.0.0/2/{filename}",
                 repo_type="dataset",
-                local_dir="./datasets/temp/"
+                local_dir="./datasets/temp_beat/",
+                allow_patterns=[f"beat_english_v2.0.0/{speaker}/*"],
             )
-            os.makedirs(dataset_path, exist_ok=True)
-            os.system(f"cp '{path}' '{dataset_path}/{filename}'")
-            print(f"Downloaded: {filename}")
+
+            # Move to correct location
+            src = f"./datasets/temp_beat/beat_english_v2.0.0/{speaker}"
+            if os.path.exists(src):
+                os.makedirs(dataset_path, exist_ok=True)
+                os.system(f"mv '{src}' '{speaker_dir}'")
+                print(f"Speaker {speaker} downloaded!")
         except Exception as e:
-            print(f"Could not download {filename}: {e}")
-    print("Sample data downloaded!")
+            print(f"Could not download speaker {speaker}: {e}")
+
 except Exception as e:
-    print(f"Could not download from HuggingFace: {e}")
-    print("Please download the dataset manually.")
+    print(f"Download failed: {e}")
+    print("")
+    print("Please download BEAT v0.2.1 manually from:")
+    print("  https://pantomatrix.github.io/BEAT/")
+    print("")
+    print("Extract to: $DATASET_PATH")
 EOF
 fi
 
-# Verify dataset exists
-if [ ! -f "$DATASET_PATH/2/2_scott_0_1_1.bvh" ]; then
-    echo "ERROR: Dataset not found at $DATASET_PATH"
+# Verify at least one speaker exists
+FOUND_SPEAKER=0
+for speaker in $BEAT_SPEAKERS; do
+    if [ -d "$DATASET_PATH/$speaker" ]; then
+        FOUND_SPEAKER=1
+        echo "Found speaker $speaker"
+    fi
+done
+
+if [ $FOUND_SPEAKER -eq 0 ]; then
+    echo "ERROR: No speaker data found at $DATASET_PATH"
     echo "Please download BEAT v0.2.1 and try again."
     exit 1
 fi
 
-echo "Dataset found!"
+echo "Dataset ready!"
 
 # Step 2: Train VQ-VAE for body
 echo ""
 echo "[Step 2] Training VQ-VAE for body (225D axis-angle)..."
+echo "Speakers: $BEAT_SPEAKERS"
+echo "Batch size: $VQVAE_BATCH_SIZE"
+echo "Epochs: $VQVAE_EPOCHS"
+
 python train_vqvae_bvh.py \
     --body_part body \
     --epochs $VQVAE_EPOCHS \
-    --batch_size $BATCH_SIZE \
+    --batch_size $VQVAE_BATCH_SIZE \
     --speakers $BEAT_SPEAKERS \
     --data_path "$DATASET_PATH" \
     --new_cache
@@ -110,7 +139,7 @@ echo "[Step 3] Training VQ-VAE for face (51D ARKit blendshapes)..."
 python train_vqvae_bvh.py \
     --body_part face \
     --epochs $VQVAE_EPOCHS \
-    --batch_size $BATCH_SIZE \
+    --batch_size $VQVAE_BATCH_SIZE \
     --speakers $BEAT_SPEAKERS \
     --data_path "$DATASET_PATH"
 
@@ -121,20 +150,36 @@ if [ ! -f "./outputs/vqvae_bvh/face/best.pth" ]; then
 fi
 echo "VQ-VAE face training complete!"
 
-# Step 4: Train shortcut generator
+# Step 4: Update config and train shortcut generator
 echo ""
 echo "[Step 4] Training shortcut generator..."
+echo "Batch size: $GENERATOR_BATCH_SIZE"
+echo "Epochs: $GENERATOR_EPOCHS"
 
-# First, rebuild cache with new_cache=True to ensure fresh data
-python -c "
+# Update config with correct settings
+python3 << EOF
 import yaml
+
 with open('configs/shortcut_bvh_arkit.yaml', 'r') as f:
     cfg = yaml.safe_load(f)
+
+# Update for H100 and 4 speakers
 cfg['data']['new_cache'] = True
+cfg['data']['train_bs'] = $GENERATOR_BATCH_SIZE
+cfg['data']['training_speakers'] = [1, 2, 3, 4]
+cfg['data']['data_path'] = '$DATASET_PATH/'
+cfg['training_speakers'] = [1, 2, 3, 4]
+cfg['batch_size'] = $GENERATOR_BATCH_SIZE
+cfg['solver']['epochs'] = $GENERATOR_EPOCHS
+
 with open('configs/shortcut_bvh_arkit.yaml', 'w') as f:
-    yaml.dump(cfg, f, default_flow_style=False)
-print('Updated config for fresh cache')
-"
+    yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+print('Updated config:')
+print(f"  - Speakers: [1, 2, 3, 4]")
+print(f"  - Batch size: $GENERATOR_BATCH_SIZE")
+print(f"  - Epochs: $GENERATOR_EPOCHS")
+EOF
 
 python train.py --config configs/shortcut_bvh_arkit.yaml
 
