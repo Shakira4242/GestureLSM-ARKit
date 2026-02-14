@@ -159,7 +159,8 @@ def main():
 
             # Forward
             output = model(motion)
-            pred_motion = output['pred_motion']
+            # Output is (B, dim, T), need to transpose back to (B, T, dim)
+            pred_motion = output['rec_pose'].permute(0, 2, 1)
             commit_loss = output['commit_loss']
 
             # Reconstruction loss
