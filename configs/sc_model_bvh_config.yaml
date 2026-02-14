@@ -1,0 +1,39 @@
+# Model config for BVH + ARKit shortcut generator
+# Input: VQ-VAE latent codes (128-dim)
+# Output: VQ-VAE latent codes for body (225D) + face (51D)
+
+model:
+  model_name: LSM
+  g_name: GestureLSM_BVH
+  do_classifier_free_guidance: False
+  guidance_scale: 2
+  n_steps: 4
+  use_exp: False
+
+  denoiser:
+    target: models.denoiser.GestureDenoiser
+    params:
+      input_dim: 128
+      latent_dim: 256
+      ff_size: 1024
+      num_layers: 8
+      num_heads: 4
+      dropout: 0.1
+      activation: "gelu"
+      n_seed: 8
+      flip_sin_to_cos: True
+      freq_shift: 0.0
+      cond_proj_dim: 256
+      use_exp: ${model.use_exp}
+
+  modality_encoder:
+    target: models.layers.modality_encoder.ModalityEncoder
+    params:
+      data_path: ./
+      t_fix_pre: False
+      audio_dim: 128
+      audio_in: 128
+      raw_audio: False
+      latent_dim: 256
+      audio_fps: 30
+      use_exp: ${model.use_exp}

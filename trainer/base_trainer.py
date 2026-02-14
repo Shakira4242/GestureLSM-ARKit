@@ -40,7 +40,9 @@ class BaseTrainer(object):
         self.args = args
         self.rank = 0
         self.checkpoint_path = os.path.join(cfg.output_dir, cfg.exp_name)
-        
+
+        # Check if using BVH format (simpler pipeline without SMPL-X)
+        self.use_bvh_format = getattr(cfg, 'use_bvh_format', False)
 
         # Initialize best metrics tracking
         self.val_best = {
@@ -49,27 +51,17 @@ class BaseTrainer(object):
             "bc": {"value": float('-inf'), "epoch": 0},  # Higher is better, so start with -inf
             "test_clip_fgd": {"value": float('inf'), "epoch": 0},
         }
-              
-        self.train_data = init_class(cfg.data.name_pyfile, cfg.data.class_name, cfg.data, loader_type='train')
-        self.train_sampler = torch.utils.data.distributed.DistributedSampler(self.train_data)
-        self.train_loader = DataLoader(self.train_data, batch_size=cfg.data.train_bs, sampler=self.train_sampler, drop_last=True, num_workers=4)
-        
-        if cfg.data.test_clip:
-            # test data for test_clip, only used for test_clip_fgd
-            self.test_clip_data = init_class(cfg.data.name_pyfile, cfg.data.class_name, cfg.data, loader_type='test')
-            self.test_clip_loader = DataLoader(self.test_clip_data, batch_size=64, drop_last=False)
-        
-        # test data for fgd, l1div and bc
-        test_data_cfg = cfg.data.copy()
-        test_data_cfg.test_clip = False
-        self.test_data = init_class(cfg.data.name_pyfile, cfg.data.class_name, test_data_cfg, loader_type='test')
-        self.test_loader = DataLoader(self.test_data, batch_size=1, drop_last=False)
-        
-        
+
+        # Initialize data loaders based on format
+        if self.use_bvh_format:
+            self._init_bvh_dataloaders(cfg)
+        else:
+            self._init_smplx_dataloaders(cfg)
+
         self.train_length = len(self.train_loader)
-        logger.info(f"Init train andtest dataloader successfully")
-        
-        
+        logger.info(f"Init train and test dataloader successfully")
+
+
         if args.mode == "train":
             # Setup logging with wandb
             if self.rank == 0:
@@ -77,15 +69,85 @@ class BaseTrainer(object):
                 run_name = cfg.exp_name + "_" + run_time
                 if hasattr(cfg, 'resume_from_checkpoint') and cfg.resume_from_checkpoint:
                     run_name += f"_resumed"
-                    
+
                 wandb.init(
                     project=cfg.wandb_project,
                     name=run_name,
-                    entity=cfg.wandb_entity,
-                    dir=cfg.wandb_log_dir,
+                    entity=getattr(cfg, 'wandb_entity', None),
+                    dir=getattr(cfg, 'wandb_log_dir', './outputs/wandb/'),
                     config=OmegaConf.to_container(cfg)
                 )
-       
+
+        # Skip SMPL-X specific initialization for BVH format
+        if self.use_bvh_format:
+            logger.info("BVH mode: Skipping SMPL-X and eval model initialization")
+            self.eval_copy = None
+            self.smplx = None
+            self.alignmenter = None
+            self.l1_calculator = None
+            self.align_mask = 60
+        else:
+            self._init_smplx_evaluation(cfg)
+
+    def _init_bvh_dataloaders(self, cfg):
+        """Initialize dataloaders for BVH format."""
+        from dataloaders.beat_normalized import BEATNormalizedDataset
+
+        # Create args object for dataset
+        data_args = type('Args', (), {})()
+        data_args.data_path = cfg.data.data_path
+        data_args.cache_path = cfg.data.cache_path
+        data_args.pose_fps = cfg.data.pose_fps
+        data_args.audio_sr = cfg.data.audio_sr
+        data_args.pose_length = cfg.data.pose_length
+        data_args.stride = cfg.data.stride
+        data_args.training_speakers = cfg.data.training_speakers
+        data_args.new_cache = cfg.data.new_cache
+
+        self.train_data = BEATNormalizedDataset(data_args, split='train')
+
+        if cfg.ddp:
+            self.train_sampler = torch.utils.data.distributed.DistributedSampler(self.train_data)
+            self.train_loader = DataLoader(
+                self.train_data, batch_size=cfg.data.train_bs,
+                sampler=self.train_sampler, drop_last=True, num_workers=4
+            )
+        else:
+            self.train_sampler = None
+            self.train_loader = DataLoader(
+                self.train_data, batch_size=cfg.data.train_bs,
+                shuffle=True, drop_last=True, num_workers=4
+            )
+
+        # Test data (same dataset, different split)
+        self.test_data = BEATNormalizedDataset(data_args, split='test')
+        self.test_loader = DataLoader(self.test_data, batch_size=1, drop_last=False)
+
+        # No test_clip for BVH mode
+        self.test_clip_data = None
+        self.test_clip_loader = None
+
+        logger.info(f"BVH dataloaders: train={len(self.train_data)}, test={len(self.test_data)}")
+
+    def _init_smplx_dataloaders(self, cfg):
+        """Initialize dataloaders for SMPL-X format (original)."""
+        self.train_data = init_class(cfg.data.name_pyfile, cfg.data.class_name, cfg.data, loader_type='train')
+        self.train_sampler = torch.utils.data.distributed.DistributedSampler(self.train_data)
+        self.train_loader = DataLoader(self.train_data, batch_size=cfg.data.train_bs, sampler=self.train_sampler, drop_last=True, num_workers=4)
+
+        if cfg.data.test_clip:
+            # test data for test_clip, only used for test_clip_fgd
+            self.test_clip_data = init_class(cfg.data.name_pyfile, cfg.data.class_name, cfg.data, loader_type='test')
+            self.test_clip_loader = DataLoader(self.test_clip_data, batch_size=64, drop_last=False)
+
+        # test data for fgd, l1div and bc
+        test_data_cfg = cfg.data.copy()
+        test_data_cfg.test_clip = False
+        self.test_data = init_class(cfg.data.name_pyfile, cfg.data.class_name, test_data_cfg, loader_type='test')
+        self.test_loader = DataLoader(self.test_data, batch_size=1, drop_last=False)
+
+    def _init_smplx_evaluation(self, cfg):
+        """Initialize SMPL-X specific evaluation components."""
         eval_model_module = __import__(f"models.motion_representation", fromlist=["something"])
         eval_args = type('Args', (), {})()
         eval_args.vae_layer = 4
@@ -94,27 +156,27 @@ class BaseTrainer(object):
         eval_args.variational = False
         eval_args.data_path_1 = "./datasets/hub/"
         eval_args.vae_grow = [1,1,2,1]
-        
+
         eval_copy = getattr(eval_model_module, 'VAESKConv')(eval_args).to(self.rank)
         other_tools.load_checkpoints(
-            eval_copy, 
-            './datasets/BEAT_SMPL/beat_v2.0.0/beat_english_v2.0.0/weights/AESKConv_240_100.bin', 
+            eval_copy,
+            './datasets/BEAT_SMPL/beat_v2.0.0/beat_english_v2.0.0/weights/AESKConv_240_100.bin',
             'VAESKConv'
         )
         self.eval_copy = eval_copy
-        
-        
+
+
         self.smplx = smplx.create(
-            self.cfg.data.data_path_1+"smplx_models/", 
+            self.cfg.data.data_path_1+"smplx_models/",
             model_type='smplx',
-            gender='NEUTRAL_2020', 
+            gender='NEUTRAL_2020',
             use_face_contour=False,
             num_betas=300,
-            num_expression_coeffs=100, 
+            num_expression_coeffs=100,
             ext='npz',
             use_pca=False,
         ).to(self.rank).eval()
-        
+
         self.alignmenter = metric.alignment(0.3, 7, self.train_data.avg_vel, upper_body=[3,6,9,12,13,14,15,16,17,18,19,20,21]) if self.rank == 0 else None
         self.align_mask = 60
         self.l1_calculator = metric.L1div() if self.rank == 0 else None

@@ -44,54 +44,68 @@ def convert_15d_to_6d(motion):
 
 class CustomTrainer(BaseTrainer):
     """
-    Generative Trainer to support various generative models
+    Generative Trainer to support various generative models.
+
+    Supports two formats:
+    - SMPL-X (default): 330D body with 3 VQ models (upper/hands/lower)
+    - BVH (use_bvh_format=True): 225D body + 51D face with 2 VQ models
     """
 
     def __init__(self, cfg, args):
         super().__init__(cfg, args)
         self.cfg = cfg
         self.args = args
-        self.joints = 55
 
-        self.ori_joint_list = joints_list["beat_smplx_joints"]
-        self.tar_joint_list_face = joints_list["beat_smplx_face"]
-        self.tar_joint_list_upper = joints_list["beat_smplx_upper"]
-        self.tar_joint_list_hands = joints_list["beat_smplx_hands"]
-        self.tar_joint_list_lower = joints_list["beat_smplx_lower"]
+        # Check if using BVH format
+        self.use_bvh_format = getattr(cfg, 'use_bvh_format', False)
 
-        self.joint_mask_face = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
-        self.joints = 55
-        for joint_name in self.tar_joint_list_face:
-            self.joint_mask_face[
-                self.ori_joint_list[joint_name][1]
-                - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
-                    1
-                ]
-            ] = 1
-        self.joint_mask_upper = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
-        for joint_name in self.tar_joint_list_upper:
-            self.joint_mask_upper[
-                self.ori_joint_list[joint_name][1]
-                - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
-                    1
-                ]
-            ] = 1
-        self.joint_mask_hands = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
-        for joint_name in self.tar_joint_list_hands:
-            self.joint_mask_hands[
-                self.ori_joint_list[joint_name][1]
-                - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
-                    1
-                ]
-            ] = 1
-        self.joint_mask_lower = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
-        for joint_name in self.tar_joint_list_lower:
-            self.joint_mask_lower[
-                self.ori_joint_list[joint_name][1]
-                - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
-                    1
-                ]
-            ] = 1
+        if self.use_bvh_format:
+            # BVH format: 75 joints, no body part splitting
+            self.joints = 75
+            self.body_dim = 225  # 75 joints × 3 axis-angle
+            self.face_dim = 51   # ARKit blendshapes
+            logger.info("Using BVH format: 225D body (axis-angle) + 51D face (ARKit)")
+        else:
+            # SMPL-X format: 55 joints with body part splitting
+            self.joints = 55
+            self.ori_joint_list = joints_list["beat_smplx_joints"]
+            self.tar_joint_list_face = joints_list["beat_smplx_face"]
+            self.tar_joint_list_upper = joints_list["beat_smplx_upper"]
+            self.tar_joint_list_hands = joints_list["beat_smplx_hands"]
+            self.tar_joint_list_lower = joints_list["beat_smplx_lower"]
+
+            self.joint_mask_face = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
+            for joint_name in self.tar_joint_list_face:
+                self.joint_mask_face[
+                    self.ori_joint_list[joint_name][1]
+                    - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
+                        1
+                    ]
+                ] = 1
+            self.joint_mask_upper = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
+            for joint_name in self.tar_joint_list_upper:
+                self.joint_mask_upper[
+                    self.ori_joint_list[joint_name][1]
+                    - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
+                        1
+                    ]
+                ] = 1
+            self.joint_mask_hands = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
+            for joint_name in self.tar_joint_list_hands:
+                self.joint_mask_hands[
+                    self.ori_joint_list[joint_name][1]
+                    - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
+                        1
+                    ]
+                ] = 1
+            self.joint_mask_lower = np.zeros(len(list(self.ori_joint_list.keys())) * 3)
+            for joint_name in self.tar_joint_list_lower:
+                self.joint_mask_lower[
+                    self.ori_joint_list[joint_name][1]
+                    - self.ori_joint_list[joint_name][0] : self.ori_joint_list[joint_name][
+                        1
+                    ]
+                ] = 1
 
         self.tracker = other_tools.EpochTracker(
             ["fgd", "bc", "l1div", "predict_x0_loss", "test_clip_fgd"],
@@ -134,37 +148,56 @@ class CustomTrainer(BaseTrainer):
 
         ##### VQ-VAE models #####
         """Initialize and load VQ-VAE models for different body parts."""
-        # Body part VQ models
-        self.vq_models = self._create_body_vq_models()
-
-        # Set all VQ models to eval mode
-        for model in self.vq_models.values():
-            model.eval().to(self.rank)
-
-        self.vq_model_upper, self.vq_model_hands, self.vq_model_lower = (
-            self.vq_models.values()
-        )
+        if self.use_bvh_format:
+            # BVH format: 2 VQ models (body + face)
+            self.vq_models = self._create_bvh_vq_models()
+            for model in self.vq_models.values():
+                model.eval().to(self.rank)
+            self.vq_model_body = self.vq_models["body"]
+            self.vq_model_face = self.vq_models["face"]
+        else:
+            # SMPL-X format: 3 VQ models (upper/hands/lower)
+            self.vq_models = self._create_body_vq_models()
+            for model in self.vq_models.values():
+                model.eval().to(self.rank)
+            self.vq_model_upper, self.vq_model_hands, self.vq_model_lower = (
+                self.vq_models.values()
+            )
 
         ##### Loss functions #####
         self.reclatent_loss = nn.MSELoss().to(self.rank)
         self.vel_loss = torch.nn.L1Loss(reduction="mean").to(self.rank)
 
         ##### Normalization #####
-        self.mean = np.load("./mean_std/beatx_2_330_mean.npy")
-        self.std = np.load("./mean_std/beatx_2_330_std.npy")
+        if self.use_bvh_format:
+            # BVH format: load from VQ-VAE output directory
+            body_mean_path = getattr(cfg, 'mean_pose_path', './outputs/vqvae_bvh/body/body_mean.npy')
+            body_std_path = getattr(cfg, 'std_pose_path', './outputs/vqvae_bvh/body/body_std.npy')
+            face_mean_path = getattr(cfg, 'mean_face_path', './outputs/vqvae_bvh/face/face_mean.npy')
+            face_std_path = getattr(cfg, 'std_face_path', './outputs/vqvae_bvh/face/face_std.npy')
 
-        # Extract body part specific normalizations
-        for part in ["upper", "hands", "lower"]:
-            mask = globals()[f"{part}_body_mask"]
-            setattr(self, f"mean_{part}", torch.from_numpy(self.mean[mask]).cuda())
-            setattr(self, f"std_{part}", torch.from_numpy(self.std[mask]).cuda())
+            self.mean_body = torch.from_numpy(np.load(body_mean_path)).float().cuda()
+            self.std_body = torch.from_numpy(np.load(body_std_path)).float().cuda()
+            self.mean_face = torch.from_numpy(np.load(face_mean_path)).float().cuda()
+            self.std_face = torch.from_numpy(np.load(face_std_path)).float().cuda()
+            logger.info(f"Loaded BVH normalization: body={body_mean_path}, face={face_mean_path}")
+        else:
+            # SMPL-X format: original paths
+            self.mean = np.load("./mean_std/beatx_2_330_mean.npy")
+            self.std = np.load("./mean_std/beatx_2_330_std.npy")
 
-        self.trans_mean = torch.from_numpy(
-            np.load("./mean_std/beatx_2_trans_mean.npy")
-        ).cuda()
-        self.trans_std = torch.from_numpy(
-            np.load("./mean_std/beatx_2_trans_std.npy")
-        ).cuda()
+            # Extract body part specific normalizations
+            for part in ["upper", "hands", "lower"]:
+                mask = globals()[f"{part}_body_mask"]
+                setattr(self, f"mean_{part}", torch.from_numpy(self.mean[mask]).cuda())
+                setattr(self, f"std_{part}", torch.from_numpy(self.std[mask]).cuda())
+
+            self.trans_mean = torch.from_numpy(
+                np.load("./mean_std/beatx_2_trans_mean.npy")
+            ).cuda()
+            self.trans_std = torch.from_numpy(
+                np.load("./mean_std/beatx_2_trans_std.npy")
+            ).cuda()
 
         if self.args.checkpoint:
             try:
@@ -185,11 +218,25 @@ class CustomTrainer(BaseTrainer):
             logger.info(f"Loaded checkpoint from {self.args.checkpoint}")
 
     def _create_body_vq_models(self) -> Dict[str, RVQVAE]:
-        """Create VQ-VAE models for body parts."""
+        """Create VQ-VAE models for SMPL-X body parts."""
         vq_configs = {
             "upper": {"dim_pose": 78},
             "hands": {"dim_pose": 180},
             "lower": {"dim_pose": 57},
+        }
+
+        vq_models = {}
+        for part, config in vq_configs.items():
+            model = self._create_rvqvae_model(config["dim_pose"], part)
+            vq_models[part] = model
+
+        return vq_models
+
+    def _create_bvh_vq_models(self) -> Dict[str, RVQVAE]:
+        """Create VQ-VAE models for BVH format (body + face)."""
+        vq_configs = {
+            "body": {"dim_pose": 225},  # 75 joints × 3 axis-angle
+            "face": {"dim_pose": 51},   # ARKit blendshapes
         }
 
         vq_models = {}
@@ -245,6 +292,45 @@ class CustomTrainer(BaseTrainer):
         return original_shape_t
 
     def _load_data(self, dict_data):
+        if self.use_bvh_format:
+            return self._load_data_bvh(dict_data)
+        else:
+            return self._load_data_smplx(dict_data)
+
+    def _load_data_bvh(self, dict_data):
+        """Load data for BVH format (225D body + 51D face)."""
+        # Motion is already normalized by dataloader: (B, T, 276)
+        motion = dict_data["motion"].to(self.rank)
+        mel = dict_data["mel"].to(self.rank)
+
+        bs, n, _ = motion.shape
+
+        # Split body and face
+        tar_body = motion[:, :, :225]   # (B, T, 225) axis-angle
+        tar_face = motion[:, :, 225:]   # (B, T, 51) ARKit
+
+        # Encode to VQ latents
+        latent_body = self.vq_model_body.map2latent(tar_body)
+        latent_face = self.vq_model_face.map2latent(tar_face)
+
+        # Concatenate latents and scale
+        latent_in = torch.cat([latent_body, latent_face], dim=2) / self.cfg.vqvae_latent_scale
+
+        # Get speaker ID if available
+        tar_id = dict_data.get("id", torch.zeros(bs, n, dtype=torch.long)).to(self.rank)
+
+        return {
+            "audio_onset": mel,  # Use mel as audio input for BVH
+            "word": None,
+            "latent_in": latent_in,
+            "tar_id": tar_id,
+            "tar_body": tar_body,
+            "tar_face": tar_face,
+            "style_feature": None,
+        }
+
+    def _load_data_smplx(self, dict_data):
+        """Load data for SMPL-X format (original implementation)."""
         facial_rep = dict_data["facial"].to(self.rank)
         beta = dict_data["beta"].to(self.rank)
         tar_trans = dict_data["trans"].to(self.rank)
@@ -279,7 +365,7 @@ class CustomTrainer(BaseTrainer):
         latent_upper_top = self.vq_model_upper.map2latent(tar_pose_upper)
         latent_hands_top = self.vq_model_hands.map2latent(tar_pose_hands)
         latent_lower_top = self.vq_model_lower.map2latent(tar_pose_lower)
-        
+
 
         ## TODO: Whether the latent scale is needed here?
         # latent_in = torch.cat([latent_upper_top, latent_hands_top, latent_lower_top], dim=2)
@@ -329,6 +415,107 @@ class CustomTrainer(BaseTrainer):
             return g_loss_final
 
     def _g_test(self, loaded_data):
+        if self.use_bvh_format:
+            return self._g_test_bvh(loaded_data)
+        else:
+            return self._g_test_smplx(loaded_data)
+
+    def _g_test_bvh(self, loaded_data):
+        """Test/inference for BVH format."""
+        self.model.eval()
+
+        tar_body = loaded_data["tar_body"]
+        tar_face = loaded_data["tar_face"]
+        audio_onset = loaded_data["audio_onset"]  # mel spectrogram
+        in_seed = loaded_data["latent_in"]
+
+        bs, n, _ = tar_body.shape
+        code_dim = self.vq_model_body.code_dim
+
+        # Handle frame alignment
+        remain = n % 8
+        if remain != 0:
+            tar_body = tar_body[:, :-remain, :]
+            tar_face = tar_face[:, :-remain, :]
+            n = n - remain
+
+        vqvae_squeeze_scale = self.cfg.vqvae_squeeze_scale
+        pre_frames_scaled = self.cfg.pre_frames * vqvae_squeeze_scale
+
+        # Generate latents
+        rec_all_body = []
+        rec_all_face = []
+
+        roundt = max(1, (n - pre_frames_scaled) // (self.cfg.pose_length - pre_frames_scaled))
+
+        for i in range(roundt):
+            round_l = self.cfg.pose_length - pre_frames_scaled
+
+            # Get audio chunk
+            if audio_onset is not None:
+                mel_start = i * round_l
+                mel_end = (i + 1) * round_l + pre_frames_scaled
+                in_audio_tmp = audio_onset[:, mel_start:mel_end, :]
+            else:
+                in_audio_tmp = None
+
+            # Get seed
+            if i == 0:
+                in_seed_tmp = in_seed[:, :self.cfg.pre_frames, :]
+            else:
+                in_seed_tmp = last_sample[:, -self.cfg.pre_frames:, :]
+
+            # Prepare conditioning
+            cond_ = {"y": {}}
+            cond_["y"]["audio_onset"] = in_audio_tmp
+            cond_["y"]["word"] = None
+            cond_["y"]["id"] = loaded_data["tar_id"][:, :round_l + pre_frames_scaled] if "tar_id" in loaded_data else None
+            cond_["y"]["seed"] = in_seed_tmp
+            cond_["y"]["style_feature"] = None
+
+            # Generate
+            sample = self.model(cond_)["latents"]
+            sample = sample.squeeze(2).permute(0, 2, 1)
+            last_sample = sample.clone()
+
+            # Split body and face latents
+            rec_latent_body = sample[..., :code_dim]
+            rec_latent_face = sample[..., code_dim:code_dim * 2]
+
+            if i == 0:
+                rec_all_body.append(rec_latent_body)
+                rec_all_face.append(rec_latent_face)
+            else:
+                rec_all_body.append(rec_latent_body[:, self.cfg.pre_frames:])
+                rec_all_face.append(rec_latent_face[:, self.cfg.pre_frames:])
+
+        # Concatenate and decode
+        rec_all_body = torch.cat(rec_all_body, dim=1) * self.cfg.vqvae_latent_scale
+        rec_all_face = torch.cat(rec_all_face, dim=1) * self.cfg.vqvae_latent_scale
+
+        rec_body = self.vq_model_body.latent2origin(rec_all_body)[0]
+        rec_face = self.vq_model_face.latent2origin(rec_all_face)[0]
+
+        # Denormalize
+        rec_body = rec_body * self.std_body + self.mean_body
+        rec_face = rec_face * self.std_face + self.mean_face
+
+        # Align lengths
+        min_len = min(rec_body.shape[1], tar_body.shape[1])
+        rec_body = rec_body[:, :min_len]
+        rec_face = rec_face[:, :min_len]
+        tar_body = tar_body[:, :min_len]
+        tar_face = tar_face[:, :min_len]
+
+        return {
+            "rec_pose": rec_body,
+            "rec_face": rec_face,
+            "tar_pose": tar_body,
+            "tar_face": tar_face,
+        }
+
+    def _g_test_smplx(self, loaded_data):
+        """Test/inference for SMPL-X format (original implementation)."""
         self.model.eval()
         tar_beta = loaded_data["beta"]
         tar_pose = loaded_data["tar_pose"]
@@ -876,6 +1063,56 @@ class CustomTrainer(BaseTrainer):
         }
 
     def val(self, epoch):
+        if self.use_bvh_format:
+            return self._val_bvh(epoch)
+        else:
+            return self._val_smplx(epoch)
+
+    def _val_bvh(self, epoch):
+        """Simplified validation for BVH format (no SMPL-X metrics)."""
+        self.tracker.reset()
+        self.model.eval()
+
+        total_loss = 0
+        total_samples = 0
+        start_time = time.time()
+
+        with torch.no_grad():
+            for its, batch_data in enumerate(self.test_loader):
+                if its > 15:  # Limit validation iterations
+                    break
+
+                loaded_data = self._load_data(batch_data)
+                net_out = self._g_test_bvh(loaded_data)
+
+                # Compute simple reconstruction loss
+                tar_body = net_out["tar_pose"]
+                rec_body = net_out["rec_pose"]
+                tar_face = net_out["tar_face"]
+                rec_face = net_out["rec_face"]
+
+                # MSE loss for body and face
+                body_loss = F.mse_loss(rec_body, tar_body).item()
+                face_loss = F.mse_loss(rec_face, tar_face).item()
+
+                total_loss += (body_loss + face_loss) * tar_body.shape[0]
+                total_samples += tar_body.shape[0]
+
+        avg_loss = total_loss / max(total_samples, 1)
+
+        # Use loss as FGD proxy for BVH mode (lower is better)
+        self.tracker.update_meter("fgd", "val", avg_loss)
+        self.tracker.update_meter("bc", "val", 0.0)  # Placeholder
+        self.tracker.update_meter("l1div", "val", 0.0)  # Placeholder
+
+        logger.info(f"BVH val loss: {avg_loss:.6f}")
+        self.val_recording(epoch)
+
+        end_time = time.time() - start_time
+        logger.info(f"BVH validation time: {int(end_time)} s")
+
+    def _val_smplx(self, epoch):
+        """Original validation for SMPL-X format."""
         self.tracker.reset()
 
         results = self._common_test_inference(
@@ -916,6 +1153,11 @@ class CustomTrainer(BaseTrainer):
         )
 
     def test_clip(self, epoch):
+        # BVH mode doesn't use test_clip, fall back to regular validation
+        if self.use_bvh_format:
+            logger.info("BVH mode: test_clip not supported, using regular validation")
+            return self._val_bvh(epoch)
+
         self.tracker.reset()
 
         # Test on CLIP dataset
@@ -976,6 +1218,47 @@ class CustomTrainer(BaseTrainer):
         )
 
     def test(self, epoch):
+        # BVH mode uses simplified testing
+        if self.use_bvh_format:
+            return self._test_bvh(epoch)
+        return self._test_smplx(epoch)
+
+    def _test_bvh(self, epoch):
+        """Simplified testing for BVH format - saves generated motion."""
+        results_save_path = self.checkpoint_path + f"/{epoch}/"
+        os.makedirs(results_save_path, exist_ok=True)
+
+        self.model.eval()
+        total_samples = 0
+        start_time = time.time()
+
+        with torch.no_grad():
+            for its, batch_data in enumerate(tqdm(self.test_loader, desc="Testing BVH")):
+                loaded_data = self._load_data(batch_data)
+                net_out = self._g_test_bvh(loaded_data)
+
+                rec_body = net_out["rec_pose"].cpu().numpy()
+                rec_face = net_out["rec_face"].cpu().numpy()
+                tar_body = net_out["tar_pose"].cpu().numpy()
+                tar_face = net_out["tar_face"].cpu().numpy()
+
+                # Save results
+                np.savez(
+                    os.path.join(results_save_path, f"sample_{its}.npz"),
+                    rec_body=rec_body,
+                    rec_face=rec_face,
+                    tar_body=tar_body,
+                    tar_face=tar_face,
+                )
+
+                total_samples += rec_body.shape[0]
+
+        end_time = time.time() - start_time
+        logger.info(f"BVH test: saved {total_samples} samples to {results_save_path}")
+        logger.info(f"Total test time: {int(end_time)} s")
+
+    def _test_smplx(self, epoch):
+        """Original test method for SMPL-X format."""
         results_save_path = self.checkpoint_path + f"/{epoch}/"
         os.makedirs(results_save_path, exist_ok=True)
 
@@ -1014,6 +1297,11 @@ class CustomTrainer(BaseTrainer):
         )
 
     def test_render(self, epoch):
+        # BVH mode doesn't support rendering (no SMPL-X)
+        if self.use_bvh_format:
+            logger.info("BVH mode: test_render not supported, use test() instead")
+            return self._test_bvh(epoch)
+
         import platform
 
         if platform.system() == "Linux":
