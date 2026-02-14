@@ -51,20 +51,38 @@ done
 if [ -n "$MISSING_SPEAKERS" ]; then
     echo "Missing or incomplete speaker directories:$MISSING_SPEAKERS"
     echo ""
-    echo "Downloading from HuggingFace using git-lfs..."
+    echo "Downloading from HuggingFace using sparse checkout (only needed speakers)..."
 
-    # Clone if not exists
+    # Use sparse checkout to avoid downloading entire 150GB+ dataset
     if [ ! -d "./datasets/BEAT_download/.git" ]; then
         rm -rf ./datasets/BEAT_download
-        git clone https://huggingface.co/datasets/H-Liu1997/BEAT ./datasets/BEAT_download/
+        mkdir -p ./datasets/BEAT_download
+        cd ./datasets/BEAT_download
+
+        # Initialize with sparse checkout and partial clone (no blobs)
+        git init
+        git remote add origin https://huggingface.co/datasets/H-Liu1997/BEAT
+        git config core.sparseCheckout true
+        git lfs install
+
+        # Only checkout the speakers we need
+        echo "beat_english_v0.2.1/beat_english_v0.2.1/1/*" >> .git/info/sparse-checkout
+        echo "beat_english_v0.2.1/beat_english_v0.2.1/2/*" >> .git/info/sparse-checkout
+        echo "beat_english_v0.2.1/beat_english_v0.2.1/3/*" >> .git/info/sparse-checkout
+        echo "beat_english_v0.2.1/beat_english_v0.2.1/4/*" >> .git/info/sparse-checkout
+
+        # Fetch only metadata first (skip LFS)
+        GIT_LFS_SKIP_SMUDGE=1 git pull origin main
+
+        cd /workspace/GestureLSM-ARKit
     fi
 
     cd ./datasets/BEAT_download
 
-    # Pull each missing speaker
+    # Pull LFS files only for needed speakers
     for speaker in $MISSING_SPEAKERS; do
-        echo "Downloading speaker $speaker..."
-        git lfs pull --include="beat_english_v0.2.1/beat_english_v0.2.1/$speaker/*" || true
+        echo "Downloading speaker $speaker LFS files..."
+        git lfs pull --include="beat_english_v0.2.1/beat_english_v0.2.1/$speaker/*"
     done
 
     cd /workspace/GestureLSM-ARKit
@@ -73,9 +91,12 @@ if [ -n "$MISSING_SPEAKERS" ]; then
     mkdir -p "$DATASET_PATH"
     for speaker in $MISSING_SPEAKERS; do
         if [ -d "./datasets/BEAT_download/beat_english_v0.2.1/beat_english_v0.2.1/$speaker" ]; then
-            mv "./datasets/BEAT_download/beat_english_v0.2.1/beat_english_v0.2.1/$speaker" "$DATASET_PATH/" 2>/dev/null || true
+            cp -r "./datasets/BEAT_download/beat_english_v0.2.1/beat_english_v0.2.1/$speaker" "$DATASET_PATH/" 2>/dev/null || true
         fi
     done
+
+    # Clean up download folder to save space
+    rm -rf ./datasets/BEAT_download
 
     echo "Dataset download complete!"
 fi
