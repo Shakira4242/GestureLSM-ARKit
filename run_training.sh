@@ -24,6 +24,9 @@ VQVAE_BATCH_SIZE=256         # H100 can handle larger batches
 GENERATOR_BATCH_SIZE=256     # H100 80GB VRAM
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 
+# HuggingFace token for faster downloads (optional but recommended)
+export HF_TOKEN="${HF_TOKEN:-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}"
+
 # Step 0: Install dependencies
 echo ""
 echo "[Step 0] Installing dependencies..."
