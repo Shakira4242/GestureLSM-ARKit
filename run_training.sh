@@ -25,7 +25,7 @@ GENERATOR_BATCH_SIZE=256     # H100 80GB VRAM
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 
 # HuggingFace token for faster downloads (optional but recommended)
-export HF_TOKEN="${HF_TOKEN:-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}"
+# Set HF_TOKEN env var before running: export HF_TOKEN="your_token_here"
 
 # Step 0: Install dependencies
 echo ""
