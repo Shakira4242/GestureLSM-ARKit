@@ -34,7 +34,7 @@ apt-get update && apt-get install -y git-lfs > /dev/null 2>&1 || true
 git lfs install > /dev/null 2>&1 || true
 
 # PyTorch 2.1 should already be installed on RunPod template
-pip install -q omegaconf loguru wandb librosa smplx scipy tqdm matplotlib huggingface_hub pyyaml einops lmdb fasttext
+pip install -q omegaconf loguru wandb librosa smplx scipy tqdm matplotlib huggingface_hub pyyaml einops lmdb fasttext tensorboard transformers accelerate soundfile
 
 # Step 1: Check/download dataset
 echo ""
