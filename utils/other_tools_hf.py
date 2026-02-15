@@ -16,7 +16,8 @@ from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 import cv2
 import utils.media
-import utils.fast_render
+# Lazy import fast_render to avoid OpenGL errors on headless servers
+# import utils.fast_render  # Imported lazily when needed
 
 def write_wav_names_to_csv(folder_path, csv_path):
     """
@@ -612,13 +613,15 @@ def render_one_sequence(
                          num_expression_coeffs=num_expression_coeffs,
                          ext=ext, use_pca=False).cuda()
     
+    import utils.fast_render  # Lazy import to avoid OpenGL on headless servers
+
     #data_npz = np.load(f"{output_dir}{res_npz_path}.npz")
     data_np_body = np.load(res_npz_path, allow_pickle=True)
     gt_np_body = np.load(gt_npz_path, allow_pickle=True)
-    
+
     if not os.path.exists(output_dir): os.makedirs(output_dir)
     # if not use_matplotlib:
-    #    import trimesh 
+    #    import trimesh
        #import pyrender
     from pyvirtualdisplay import Display
     #'''
@@ -700,10 +703,12 @@ def render_one_sequence_no_gt(
                          num_expression_coeffs=num_expression_coeffs,
                          ext=ext, use_pca=False).cuda()
     
+    import utils.fast_render  # Lazy import to avoid OpenGL on headless servers
+
     #data_npz = np.load(f"{output_dir}{res_npz_path}.npz")
     data_np_body = np.load(res_npz_path, allow_pickle=True)
     # gt_np_body = np.load(gt_npz_path, allow_pickle=True)
-    
+
     if not os.path.exists(output_dir): os.makedirs(output_dir)
     # if not use_matplotlib:
     #    import trimesh 
