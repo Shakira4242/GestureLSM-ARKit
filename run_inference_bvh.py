@@ -210,7 +210,7 @@ def run_bvh_inference(model, vq_models, mel_features, seed_latent, norm, args):
             seed_tmp = last_sample[:, -pre_frames:, :]
 
         cond = {'y': {
-            'audio': audio_tmp,  # Use 'audio' key for mel features
+            'audio_onset': audio_tmp,  # Model expects 'audio_onset' key
             'word': None,  # No text in BVH mode
             'id': torch.zeros(bs, pre_frames).long().to(device),
             'seed': seed_tmp,
