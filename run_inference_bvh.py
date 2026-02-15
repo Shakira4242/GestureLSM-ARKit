@@ -122,8 +122,27 @@ def prepare_seed_from_data(data_path, vq_models, norm, args):
     with open(cache_path, 'rb') as f:
         cache = pickle.load(f)
 
-    # Get first sample for seed
-    sample = cache[0]
+    # Get first sample for seed - handle different cache structures
+    if isinstance(cache, dict):
+        # Dict structure - get samples list
+        if 'samples' in cache:
+            samples = cache['samples']
+            sample = samples[0]
+        else:
+            # Maybe it's a dict with numeric string keys or other structure
+            keys = list(cache.keys())
+            if 'pose' in keys:
+                # Single sample dict
+                sample = cache
+            else:
+                # Try first key
+                sample = cache[keys[0]]
+    elif isinstance(cache, list):
+        sample = cache[0]
+    else:
+        raise ValueError(f"Unknown cache structure: {type(cache)}")
+
+    # Get body and face data
     body = torch.from_numpy(sample['pose'][:args.pose_length]).float().to(device)
     face = torch.from_numpy(sample['facial'][:args.pose_length]).float().to(device)
 
