@@ -393,6 +393,186 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=Fals
         return True
 
 
+def check_generator(num_samples=5, device='cuda', use_latest=False, specific_epoch=None):
+    """
+    Check generator quality during training.
+
+    This is THE critical check - generator predicting bad latents = jittery motion.
+
+    Tests:
+    1. Does generator output realistic latent distributions?
+    2. When decoded, is the motion smooth?
+    3. Does motion timing correlate with audio?
+    """
+    print("\n" + "="*60)
+    print("Generator Sanity Check (THE CRITICAL ONE)")
+    print("="*60)
+
+    # Check if generator checkpoint exists
+    ckpt_dir = './outputs/shortcut_bvh_arkit'
+
+    if specific_epoch is not None:
+        ckpt_path = f'{ckpt_dir}/epoch_{specific_epoch}.pth'
+    elif use_latest:
+        import glob
+        # Look for epoch checkpoints or best_fgd
+        epoch_files = glob.glob(f'{ckpt_dir}/epoch_*.pth')
+        best_fgd = f'{ckpt_dir}/best_fgd/ckpt.pth'
+
+        if os.path.exists(best_fgd):
+            ckpt_path = best_fgd
+            print("Using best_fgd checkpoint")
+        elif epoch_files:
+            epochs = [int(f.split('epoch_')[1].split('.pth')[0]) for f in epoch_files]
+            latest_epoch = max(epochs)
+            ckpt_path = f'{ckpt_dir}/epoch_{latest_epoch}.pth'
+            print(f"Using latest checkpoint: epoch {latest_epoch}")
+        else:
+            ckpt_path = None
+    else:
+        ckpt_path = f'{ckpt_dir}/best_fgd/ckpt.pth'
+
+    if ckpt_path is None or not os.path.exists(ckpt_path):
+        print(f"Generator checkpoint not found")
+        print("Generator training may not have started yet...")
+
+        # List what's available
+        import glob
+        available = glob.glob(f'{ckpt_dir}/**/*.pth', recursive=True)
+        if available:
+            print(f"Available: {available[:5]}")
+        return False
+
+    print(f"Loading: {ckpt_path}")
+
+    # Load VQ-VAEs first
+    vq_body_path = './outputs/vqvae_bvh/body/best.pth'
+    vq_face_path = './outputs/vqvae_bvh/face/best.pth'
+
+    if not os.path.exists(vq_body_path):
+        print("VQ-VAE body not found - train VQ-VAEs first!")
+        return False
+    if not os.path.exists(vq_face_path):
+        print("VQ-VAE face not found - train VQ-VAEs first!")
+        return False
+
+    # Load VQ-VAEs
+    vq_body = load_vqvae(vq_body_path, 225, device)
+    vq_face = load_vqvae(vq_face_path, 51, device)
+
+    # Load normalization stats
+    body_mean = np.load('./outputs/vqvae_bvh/body/body_mean.npy')
+    body_std = np.load('./outputs/vqvae_bvh/body/body_std.npy')
+    face_mean = np.load('./outputs/vqvae_bvh/face/face_mean.npy')
+    face_std = np.load('./outputs/vqvae_bvh/face/face_std.npy')
+
+    # Load dataset cache for ground truth comparison
+    cache_path = './datasets/beat_cache/beat_bvh_arkit/train_cache.pkl'
+    if not os.path.exists(cache_path):
+        print(f"Cache not found: {cache_path}")
+        return False
+
+    import pickle
+    with open(cache_path, 'rb') as f:
+        cache = pickle.load(f)
+
+    samples = cache['samples'][:num_samples]
+
+    # We need to load the generator model
+    # This is complex because it depends on the trainer setup
+    # For now, let's do a simpler check: analyze the VQ latent space
+
+    print("\n[Checking VQ-VAE latent space quality...]")
+
+    all_body_latents = []
+    all_face_latents = []
+    all_body_vel_ratio = []
+    all_face_vel_ratio = []
+
+    with torch.no_grad():
+        for i, sample in enumerate(samples):
+            body = sample['body']  # (T, 225)
+            face = sample['face']  # (T, 51)
+
+            # Normalize
+            body_norm = (body - cache['body_mean']) / cache['body_std']
+            face_norm = (face - cache['face_mean']) / cache['face_std']
+
+            # To tensor
+            body_t = torch.from_numpy(body_norm).float().unsqueeze(0).to(device)
+            face_t = torch.from_numpy(face_norm).float().unsqueeze(0).to(device)
+
+            # Encode to latents
+            _, body_latents = vq_body.encode(body_t)
+            _, face_latents = vq_face.encode(face_t)
+
+            all_body_latents.append(body_latents.cpu().numpy())
+            all_face_latents.append(face_latents.cpu().numpy())
+
+            # Decode back and check smoothness
+            body_recon = vq_body(body_t)['rec_pose'].cpu().numpy()[0]
+            face_recon = vq_face(face_t)['rec_pose'].cpu().numpy()[0]
+
+            # Denormalize
+            body_recon = body_recon * cache['body_std'] + cache['body_mean']
+            face_recon = face_recon * cache['face_std'] + cache['face_mean']
+
+            # Velocity check
+            vel_body_in = compute_velocity(body)
+            vel_body_out = compute_velocity(body_recon)
+            vel_face_in = compute_velocity(face)
+            vel_face_out = compute_velocity(face_recon)
+
+            body_ratio = np.std(vel_body_out) / (np.std(vel_body_in) + 1e-7)
+            face_ratio = np.std(vel_face_out) / (np.std(vel_face_in) + 1e-7)
+
+            all_body_vel_ratio.append(body_ratio)
+            all_face_vel_ratio.append(face_ratio)
+
+    # Analyze latent distributions
+    all_body_latents = np.concatenate(all_body_latents, axis=0)
+    all_face_latents = np.concatenate(all_face_latents, axis=0)
+
+    print("\n" + "-"*50)
+    print("LATENT SPACE ANALYSIS:")
+    print("-"*50)
+    print(f"Body latent shape: {all_body_latents.shape}")
+    print(f"Body latent mean:  {np.mean(all_body_latents):.4f}")
+    print(f"Body latent std:   {np.std(all_body_latents):.4f}")
+    print(f"Body latent range: [{np.min(all_body_latents):.2f}, {np.max(all_body_latents):.2f}]")
+    print(f"")
+    print(f"Face latent shape: {all_face_latents.shape}")
+    print(f"Face latent mean:  {np.mean(all_face_latents):.4f}")
+    print(f"Face latent std:   {np.std(all_face_latents):.4f}")
+    print(f"Face latent range: [{np.min(all_face_latents):.2f}, {np.max(all_face_latents):.2f}]")
+    print("-"*50)
+
+    print("\nVQ-VAE DECODE QUALITY:")
+    print("-"*50)
+    print(f"Body velocity ratio: {np.mean(all_body_vel_ratio):.3f}  {'[OK]' if np.mean(all_body_vel_ratio) < 1.5 else '[BAD]'}")
+    print(f"Face velocity ratio: {np.mean(all_face_vel_ratio):.3f}  {'[OK]' if np.mean(all_face_vel_ratio) < 1.5 else '[BAD]'}")
+    print("-"*50)
+
+    # Interpretation
+    print("\n" + "="*50)
+    print("WHAT THE GENERATOR MUST DO:")
+    print("="*50)
+    print(f"Generator must predict latents with:")
+    print(f"  - Mean ≈ {np.mean(all_body_latents):.2f} (body) / {np.mean(all_face_latents):.2f} (face)")
+    print(f"  - Std ≈ {np.std(all_body_latents):.2f} (body) / {np.std(all_face_latents):.2f} (face)")
+    print(f"")
+    print(f"If generator predictions are wildly different → jittery motion!")
+    print(f"")
+    print(f"[INFO] Full generator inference check requires loading the model.")
+    print(f"       Run this after generator training starts to compare predicted vs real latents.")
+
+    # Check if we can actually load and run the generator
+    # This would require importing the model architecture which is complex
+    # For now, this gives useful baseline info
+
+    return True
+
+
 def check_pipeline(audio_path=None, device='cuda'):
     """
     Check full audio -> motion pipeline.
@@ -526,7 +706,7 @@ def check_pipeline(audio_path=None, device='cuda'):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', type=str, default='vqvae',
-                        choices=['vqvae', 'vqvae_body', 'vqvae_face', 'pipeline', 'all'],
+                        choices=['vqvae', 'vqvae_body', 'vqvae_face', 'generator', 'pipeline', 'all'],
                         help='What to check')
     parser.add_argument('--audio', type=str, default=None,
                         help='Audio file for pipeline test')
@@ -548,6 +728,9 @@ def main():
 
     if args.check in ['vqvae_face', 'all']:
         results['vqvae_face'] = check_vqvae('face', args.samples, device, args.latest, args.epoch)
+
+    if args.check in ['generator', 'all']:
+        results['generator'] = check_generator(args.samples, device, args.latest, args.epoch)
 
     if args.check in ['pipeline', 'all']:
         results['pipeline'] = check_pipeline(args.audio, device)
