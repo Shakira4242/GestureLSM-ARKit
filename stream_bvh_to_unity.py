@@ -146,7 +146,7 @@ def convert_body_to_unity(body_frame, coord_fix=0):
     return unity_quats.flatten()
 
 
-def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0):
+def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0, audio_latency_ms=100):
     """
     Stream motion data to Unity via UDP with millisecond-accurate audio sync.
 
@@ -193,12 +193,15 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0)
         time.sleep(1)
     print("  GO!")
 
-    # Start audio and motion simultaneously
+    # Start audio FIRST - it has ~50-200ms latency before sound reaches speakers
     if audio is not None and sd is not None:
-        # Use low-latency settings for better sync
-        sd.play(audio, audio_sr, blocking=False)
+        # Use low-latency settings
+        sd.play(audio, audio_sr, blocking=False, latency='low')
+        # Wait for audio to actually start playing through speakers
+        time.sleep(audio_latency_ms / 1000.0)
+        print(f"  Audio started (compensated {audio_latency_ms}ms latency)")
 
-    # Record precise start time IMMEDIATELY after audio starts
+    # NOW start motion - audio should be playing
     start_time_ns = time.perf_counter_ns()
 
     dropped_frames = 0
@@ -261,6 +264,8 @@ def main():
     parser.add_argument('--end_frame', type=int, default=-1, help='End at this frame (-1 = all)')
     parser.add_argument('--coord_fix', type=int, default=0,
                         help='Coordinate fix: 0=none (Unity handles it), 1=negate XZ here')
+    parser.add_argument('--audio_latency', type=int, default=100,
+                        help='Audio latency compensation in ms (increase if audio starts late)')
 
     args = parser.parse_args()
 
@@ -323,7 +328,18 @@ def main():
         try:
             import librosa
             audio, audio_sr = librosa.load(audio_file, sr=16000)
-            print(f"Audio loaded: {audio_file} ({len(audio)/audio_sr:.1f}s)")
+            audio_duration = len(audio) / audio_sr
+            motion_duration = len(body) / fps
+            print(f"Audio loaded: {audio_file} ({audio_duration:.1f}s)")
+            print(f"Motion duration: {motion_duration:.1f}s")
+
+            # Truncate audio to match motion duration
+            if audio_duration > motion_duration:
+                target_samples = int(motion_duration * audio_sr)
+                audio = audio[:target_samples]
+                print(f"Audio truncated to {motion_duration:.1f}s to match motion")
+            elif motion_duration > audio_duration:
+                print(f"WARNING: Motion is longer than audio! Audio will end early.")
         except ImportError:
             print("Warning: librosa not installed, skipping audio")
         except Exception as e:
@@ -334,7 +350,7 @@ def main():
     print("=" * 60)
 
     try:
-        stream_to_unity(body, face, audio=audio, audio_sr=audio_sr, fps=fps, coord_fix=args.coord_fix)
+        stream_to_unity(body, face, audio=audio, audio_sr=audio_sr, fps=fps, coord_fix=args.coord_fix, audio_latency_ms=args.audio_latency)
     except KeyboardInterrupt:
         print("\nStopped by user")
 
