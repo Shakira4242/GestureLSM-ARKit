@@ -71,7 +71,7 @@ def compute_velocity(motion):
         return motion[:, 1:] - motion[:, :-1]
 
 
-def check_vqvae(body_part='body', num_samples=10, device='cuda'):
+def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=False, specific_epoch=None):
     """
     Check VQ-VAE reconstruction quality.
 
@@ -85,18 +85,41 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     print(f"VQ-VAE Sanity Check ({body_part})")
     print("="*60)
 
-    # Paths
+    # Determine checkpoint path
     if body_part == 'body':
-        ckpt_path = './outputs/vqvae_bvh/body/best.pth'
+        ckpt_dir = './outputs/vqvae_bvh/body'
         dim_pose = 225
     else:
-        ckpt_path = './outputs/vqvae_bvh/face/best.pth'
+        ckpt_dir = './outputs/vqvae_bvh/face'
         dim_pose = 51
+
+    if specific_epoch is not None:
+        ckpt_path = f'{ckpt_dir}/epoch_{specific_epoch}.pth'
+    elif use_latest:
+        # Find the latest epoch checkpoint
+        import glob
+        epoch_files = glob.glob(f'{ckpt_dir}/epoch_*.pth')
+        if epoch_files:
+            # Extract epoch numbers and find max
+            epochs = [int(f.split('epoch_')[1].split('.pth')[0]) for f in epoch_files]
+            latest_epoch = max(epochs)
+            ckpt_path = f'{ckpt_dir}/epoch_{latest_epoch}.pth'
+            print(f"Using latest checkpoint: epoch {latest_epoch}")
+        else:
+            ckpt_path = f'{ckpt_dir}/best.pth'
+            print("No epoch checkpoints found, using best.pth")
+    else:
+        ckpt_path = f'{ckpt_dir}/best.pth'
 
     # Check if checkpoint exists
     if not os.path.exists(ckpt_path):
         print(f"Checkpoint not found: {ckpt_path}")
         print("VQ-VAE training may still be in progress...")
+        # List available checkpoints
+        import glob
+        available = glob.glob(f'{ckpt_dir}/*.pth')
+        if available:
+            print(f"Available checkpoints: {[os.path.basename(f) for f in available]}")
         return False
 
     # Load model
@@ -110,6 +133,7 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     if epoch < 30:
         print(f"\n[WARNING] Only epoch {epoch} - results may not be reliable!")
         print("          Wait until epoch 50+ for meaningful metrics.")
+        print("          Or use --latest to check most recent checkpoint.")
         print("          Running anyway for reference...\n")
 
     # Load dataset
@@ -483,6 +507,10 @@ def main():
                         help='Audio file for pipeline test')
     parser.add_argument('--samples', type=int, default=10,
                         help='Number of samples for VQ-VAE check')
+    parser.add_argument('--latest', action='store_true',
+                        help='Use latest epoch checkpoint instead of best.pth')
+    parser.add_argument('--epoch', type=int, default=None,
+                        help='Use specific epoch checkpoint (e.g., --epoch 50)')
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -491,10 +519,10 @@ def main():
     results = {}
 
     if args.check in ['vqvae', 'vqvae_body', 'all']:
-        results['vqvae_body'] = check_vqvae('body', args.samples, device)
+        results['vqvae_body'] = check_vqvae('body', args.samples, device, args.latest, args.epoch)
 
     if args.check in ['vqvae_face', 'all']:
-        results['vqvae_face'] = check_vqvae('face', args.samples, device)
+        results['vqvae_face'] = check_vqvae('face', args.samples, device, args.latest, args.epoch)
 
     if args.check in ['pipeline', 'all']:
         results['pipeline'] = check_pipeline(args.audio, device)
