@@ -343,6 +343,102 @@ def find_template_bvh(data_path):
     return None
 
 
+def compute_smoothness_metrics(motion, name, expected_range=None):
+    """
+    Compute smoothness metrics for motion data.
+    Returns dict with pass/fail status for each metric.
+    """
+    results = {'name': name, 'passed': True, 'metrics': {}}
+
+    # Velocity (1st derivative)
+    vel = np.diff(motion, axis=0)
+    # Acceleration (2nd derivative)
+    acc = np.diff(vel, axis=0)
+    # Jerk (3rd derivative) - high jerk = jittery
+    jerk = np.diff(acc, axis=0)
+
+    # Temporal autocorrelation (how similar consecutive frames are)
+    # High autocorr = smooth continuous motion
+    autocorr = np.corrcoef(motion[:-1].flatten(), motion[1:].flatten())[0, 1]
+
+    # Max frame-to-frame jump
+    max_jump = np.abs(vel).max()
+
+    # Store metrics
+    results['metrics']['value_min'] = float(motion.min())
+    results['metrics']['value_max'] = float(motion.max())
+    results['metrics']['velocity_std'] = float(vel.std())
+    results['metrics']['acceleration_std'] = float(acc.std())
+    results['metrics']['jerk_std'] = float(jerk.std())
+    results['metrics']['temporal_autocorr'] = float(autocorr)
+    results['metrics']['max_jump'] = float(max_jump)
+
+    # Check pass/fail criteria
+    # Temporal autocorrelation > 0.9 means smooth continuous motion
+    if autocorr < 0.9:
+        results['passed'] = False
+        results['fail_reason'] = f"Low temporal autocorr ({autocorr:.4f} < 0.9) - motion may be discontinuous"
+
+    # Jerk std < 0.5 means not too jittery (threshold depends on data scale)
+    if jerk.std() > 0.5:
+        results['passed'] = False
+        results['fail_reason'] = f"High jerk ({jerk.std():.4f} > 0.5) - motion may be jittery"
+
+    # Check value range if provided
+    if expected_range:
+        if motion.min() < expected_range[0] or motion.max() > expected_range[1]:
+            results['passed'] = False
+            results['fail_reason'] = f"Values outside expected range {expected_range}"
+
+    return results
+
+
+def print_smoothness_report(body_np, face_np):
+    """Print smoothness metrics report for body and face motion."""
+    print(f"\n{'=' * 60}")
+    print("SMOOTHNESS METRICS (Sanity Check)")
+    print(f"{'=' * 60}")
+
+    # Body metrics (axis-angle, roughly ±π range)
+    body_results = compute_smoothness_metrics(body_np, "BODY", expected_range=(-4, 4))
+    print(f"\n{body_results['name']} (225D axis-angle):")
+    print(f"  Value range: [{body_results['metrics']['value_min']:.3f}, {body_results['metrics']['value_max']:.3f}]")
+    print(f"  Velocity std: {body_results['metrics']['velocity_std']:.6f}")
+    print(f"  Acceleration std: {body_results['metrics']['acceleration_std']:.6f}")
+    print(f"  Jerk std: {body_results['metrics']['jerk_std']:.6f}")
+    print(f"  Temporal autocorr: {body_results['metrics']['temporal_autocorr']:.4f}")
+    print(f"  Max frame-to-frame jump: {body_results['metrics']['max_jump']:.4f}")
+
+    if body_results['passed']:
+        print(f"  ✓ PASSED - Motion is smooth and continuous")
+    else:
+        print(f"  ✗ FAILED - {body_results.get('fail_reason', 'Unknown')}")
+
+    # Face metrics (blendshapes, 0-1 range)
+    face_results = compute_smoothness_metrics(face_np, "FACE", expected_range=(-0.5, 1.5))
+    print(f"\n{face_results['name']} (51D ARKit blendshapes):")
+    print(f"  Value range: [{face_results['metrics']['value_min']:.3f}, {face_results['metrics']['value_max']:.3f}]")
+    print(f"  Velocity std: {face_results['metrics']['velocity_std']:.6f}")
+    print(f"  Acceleration std: {face_results['metrics']['acceleration_std']:.6f}")
+    print(f"  Jerk std: {face_results['metrics']['jerk_std']:.6f}")
+    print(f"  Temporal autocorr: {face_results['metrics']['temporal_autocorr']:.4f}")
+    print(f"  Max frame-to-frame jump: {face_results['metrics']['max_jump']:.4f}")
+
+    if face_results['passed']:
+        print(f"  ✓ PASSED - Motion is smooth and continuous")
+    else:
+        print(f"  ✗ FAILED - {face_results.get('fail_reason', 'Unknown')}")
+
+    # Overall verdict
+    print(f"\n{'-' * 60}")
+    if body_results['passed'] and face_results['passed']:
+        print("OVERALL: ✓ PASSED - Output is smooth and ready for Unity")
+    else:
+        print("OVERALL: ✗ FAILED - Output may have issues")
+        print("  (This is expected early in training - keep training!)")
+    print(f"{'=' * 60}")
+
+
 def find_test_audio(data_path):
     """Find a test audio file from the dataset."""
     import glob
@@ -498,6 +594,9 @@ def main():
     print(f"  Face (first 6 blendshapes):")
     for i in range(min(6, len(ARKIT_BLENDSHAPES))):
         print(f"    {ARKIT_BLENDSHAPES[i]}: {face_np[0, i]:.4f}")
+
+    # Run smoothness sanity check
+    print_smoothness_report(body_np, face_np)
 
     print(f"\n{'=' * 60}")
     print(f"SUCCESS!")
