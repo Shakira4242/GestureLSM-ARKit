@@ -120,14 +120,23 @@ class BaseTrainer(object):
             )
 
         # Test data (same dataset, different split)
-        self.test_data = BEATNormalizedDataset(data_args, split='test')
-        self.test_loader = DataLoader(self.test_data, batch_size=1, drop_last=False)
+        # Skip if skip_eval_model is True to avoid building test cache
+        if getattr(cfg, 'skip_eval_model', False):
+            logger.info("Skipping test dataloader (skip_eval_model=True)")
+            self.test_data = None
+            self.test_loader = None
+        else:
+            self.test_data = BEATNormalizedDataset(data_args, split='test')
+            self.test_loader = DataLoader(self.test_data, batch_size=1, drop_last=False)
 
         # No test_clip for BVH mode
         self.test_clip_data = None
         self.test_clip_loader = None
 
-        logger.info(f"BVH dataloaders: train={len(self.train_data)}, test={len(self.test_data)}")
+        if self.test_data:
+            logger.info(f"BVH dataloaders: train={len(self.train_data)}, test={len(self.test_data)}")
+        else:
+            logger.info(f"BVH dataloaders: train={len(self.train_data)}, test=skipped")
 
     def _init_smplx_dataloaders(self, cfg):
         """Initialize dataloaders for SMPL-X format (original)."""
