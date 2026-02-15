@@ -540,8 +540,18 @@ def main():
     model = torch.nn.DataParallel(model, [0]).to(device)
 
     if os.path.exists(args.test_ckpt):
-        other_tools.load_checkpoints(model, args.test_ckpt, args.g_name)
+        # Load checkpoint directly (uses model_state_dict key)
+        ckpt = torch.load(args.test_ckpt, map_location=device, weights_only=False)
+        if 'model_state_dict' in ckpt:
+            model.load_state_dict(ckpt['model_state_dict'])
+        elif 'model_state' in ckpt:
+            model.load_state_dict(ckpt['model_state'])
+        else:
+            # Try loading directly
+            model.load_state_dict(ckpt)
         print(f"   Loaded: {args.test_ckpt}")
+        if 'epoch' in ckpt:
+            print(f"   Epoch: {ckpt['epoch']}")
     else:
         print(f"   WARNING: Checkpoint not found at {args.test_ckpt}")
         print(f"   Using random weights (for testing pipeline only)")
