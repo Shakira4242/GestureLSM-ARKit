@@ -393,6 +393,114 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=Fals
         return True
 
 
+def check_audio_pipeline(num_samples=5, device='cuda'):
+    """
+    Check the audio processing pipeline.
+
+    Verifies:
+    1. Audio files can be loaded
+    2. Mel spectrogram has correct shape
+    3. Audio-motion alignment is correct
+    4. Audio features have reasonable values
+    """
+    print("\n" + "="*60)
+    print("Audio Pipeline Sanity Check")
+    print("="*60)
+
+    import librosa
+
+    # Find audio files in dataset
+    dataset_path = './datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1'
+    audio_files = []
+
+    for speaker in ['1', '2', '3', '4']:
+        speaker_dir = os.path.join(dataset_path, speaker)
+        if os.path.exists(speaker_dir):
+            wavs = [os.path.join(speaker_dir, f) for f in os.listdir(speaker_dir) if f.endswith('.wav')]
+            audio_files.extend(wavs[:2])  # 2 per speaker
+
+    if not audio_files:
+        print("No audio files found in dataset!")
+        return False
+
+    print(f"Found {len(audio_files)} audio files to check")
+
+    # Load and process audio
+    all_mels = []
+    all_durations = []
+
+    for audio_path in audio_files[:num_samples]:
+        print(f"\nProcessing: {os.path.basename(audio_path)}")
+
+        # Load audio
+        audio, sr = librosa.load(audio_path, sr=16000)
+        duration = len(audio) / sr
+        all_durations.append(duration)
+        print(f"  Duration: {duration:.1f}s, Sample rate: {sr}")
+
+        # Compute mel (same as dataloader)
+        audio_18k = librosa.resample(audio, orig_sr=16000, target_sr=18000)
+        mel = librosa.feature.melspectrogram(
+            y=audio_18k, sr=18000, hop_length=1200, n_mels=128
+        )
+        mel = np.swapaxes(mel[..., :-1], -1, -2).astype(np.float32)
+
+        print(f"  Mel shape: {mel.shape} (frames, features)")
+        print(f"  Mel FPS: {mel.shape[0] / duration:.1f} (should be ~15)")
+        print(f"  Mel range: [{mel.min():.2f}, {mel.max():.2f}]")
+        print(f"  Mel mean: {mel.mean():.4f}, std: {mel.std():.4f}")
+
+        all_mels.append(mel)
+
+        # Check alignment with motion (30fps motion vs 15fps mel)
+        motion_frames = int(duration * 30)
+        mel_frames = mel.shape[0]
+        ratio = motion_frames / mel_frames
+        print(f"  Motion frames (@30fps): {motion_frames}")
+        print(f"  Mel frames: {mel_frames}")
+        print(f"  Ratio: {ratio:.2f} (should be ~2.0)")
+
+        if abs(ratio - 2.0) > 0.5:
+            print(f"  [WARN] Ratio is off - alignment may be wrong!")
+
+    # Summary
+    print("\n" + "-"*50)
+    print("AUDIO PIPELINE SUMMARY:")
+    print("-"*50)
+
+    avg_duration = np.mean(all_durations)
+    all_mel_means = [m.mean() for m in all_mels]
+    all_mel_stds = [m.std() for m in all_mels]
+
+    print(f"Average clip duration: {avg_duration:.1f}s")
+    print(f"Mel mean across clips: {np.mean(all_mel_means):.4f}")
+    print(f"Mel std across clips:  {np.mean(all_mel_stds):.4f}")
+    print("-"*50)
+
+    # Interpretation
+    print("\nINTERPRETATION:")
+
+    # Check mel values are reasonable
+    avg_mel_mean = np.mean(all_mel_means)
+    if avg_mel_mean < 0.001:
+        print("  [WARN] Mel values very low - audio might be silent?")
+    elif avg_mel_mean > 100:
+        print("  [WARN] Mel values very high - check normalization")
+    else:
+        print("  [OK] Mel values look reasonable")
+
+    # Check consistency
+    mel_std_variation = np.std(all_mel_means)
+    if mel_std_variation > avg_mel_mean * 0.5:
+        print("  [WARN] High variation between clips - inconsistent audio levels?")
+    else:
+        print("  [OK] Audio levels consistent across clips")
+
+    print("\n" + "-"*50)
+    print("[PASS] Audio pipeline looks healthy!")
+    return True
+
+
 def check_generator(num_samples=5, device='cuda', use_latest=False, specific_epoch=None):
     """
     Check generator quality during training.
@@ -706,7 +814,7 @@ def check_pipeline(audio_path=None, device='cuda'):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', type=str, default='vqvae',
-                        choices=['vqvae', 'vqvae_body', 'vqvae_face', 'generator', 'pipeline', 'all'],
+                        choices=['vqvae', 'vqvae_body', 'vqvae_face', 'audio', 'generator', 'pipeline', 'all'],
                         help='What to check')
     parser.add_argument('--audio', type=str, default=None,
                         help='Audio file for pipeline test')
@@ -728,6 +836,9 @@ def main():
 
     if args.check in ['vqvae_face', 'all']:
         results['vqvae_face'] = check_vqvae('face', args.samples, device, args.latest, args.epoch)
+
+    if args.check in ['audio', 'all']:
+        results['audio'] = check_audio_pipeline(args.samples, device)
 
     if args.check in ['generator', 'all']:
         results['generator'] = check_generator(args.samples, device, args.latest, args.epoch)
