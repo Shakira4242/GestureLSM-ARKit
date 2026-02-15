@@ -182,6 +182,7 @@ solver:
   decay_rate: 0.1
   warmup_lr: 1e-6
   warmup_epochs: 5
+  COOLDOWN_EPOCHS: 10
 
 # GPU
 gpus: [0]
