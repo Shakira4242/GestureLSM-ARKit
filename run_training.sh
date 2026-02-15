@@ -170,7 +170,7 @@ with open('configs/shortcut_bvh_arkit.yaml', 'r') as f:
     cfg = yaml.safe_load(f)
 
 # Update for H100 and 4 speakers
-cfg['data']['new_cache'] = True
+cfg['data']['new_cache'] = False  # Reuse existing cache from VQ-VAE training
 cfg['data']['train_bs'] = $GENERATOR_BATCH_SIZE
 cfg['data']['training_speakers'] = [1, 2, 3, 4]
 cfg['data']['data_path'] = '$DATASET_PATH/'
