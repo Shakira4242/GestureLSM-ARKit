@@ -477,14 +477,31 @@ def main():
     print(f"Checkpoint: {cli_args.checkpoint}")
     print(f"Output: {cli_args.output}")
 
-    # Load config - override sys.argv to only pass config file
-    original_argv = sys.argv
-    sys.argv = ['run_inference_bvh.py', '-c', cli_args.config]
+    # Load config directly from YAML (bypass configargparse conflicts)
+    from omegaconf import OmegaConf
+    cfg = OmegaConf.load(cli_args.config)
 
-    # Import and parse config
-    from utils import config as cfg_module
-    args, cfg = cfg_module.parse_args()
-    sys.argv = original_argv  # Restore
+    # Create args namespace from config
+    class Args:
+        pass
+    args = Args()
+
+    # Copy all config values to args
+    for key, value in OmegaConf.to_container(cfg, resolve=True).items():
+        setattr(args, key, value)
+
+    # Set defaults for paths
+    args.data_path = getattr(args, 'data_path', './datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1/')
+    args.cache_path = getattr(args, 'cache_path', './datasets/beat_cache/beat_bvh_arkit/')
+    args.out_path = getattr(args, 'out_path', './outputs/shortcut_bvh_arkit/')
+    args.pose_length = getattr(args, 'pose_length', 128)
+    args.pre_frames = getattr(args, 'pre_frames', 4)
+    args.pose_fps = getattr(args, 'pose_fps', 30)
+    args.audio_sr = getattr(args, 'audio_sr', 16000)
+    args.audio_f = getattr(args, 'audio_f', 128)
+    args.vqvae_latent_scale = getattr(args, 'vqvae_latent_scale', 5)
+    args.vqvae_squeeze_scale = getattr(args, 'vqvae_squeeze_scale', 4)
+    args.g_name = getattr(args, 'g_name', 'GestureLSM') if not hasattr(args, 'model') else cfg.model.g_name
 
     # Find audio if not provided
     audio_path = cli_args.audio
