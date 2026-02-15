@@ -56,7 +56,7 @@ model:
   denoiser:
     target: models.denoiser.GestureDenoiser
     params:
-      input_dim: 256  # body (128) + face (128) latent codes
+      input_dim: 128  # latent code dim per body part
       latent_dim: 256
       ff_size: 1024
       num_layers: 8
@@ -68,6 +68,7 @@ model:
       freq_shift: 0.0
       cond_proj_dim: 256
       use_exp: False
+      num_body_parts: 2  # BVH: body + face (vs SMPL-X: upper + hands + lower)
 
   modality_encoder:
     target: models.layers.modality_encoder.ModalityEncoder

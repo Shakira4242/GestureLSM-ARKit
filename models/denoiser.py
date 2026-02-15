@@ -24,10 +24,11 @@ class GestureDenoiser(nn.Module):
         use_exp=False,
         seq_len=32,
         embed_context_multiplier=4,
-    
+        num_body_parts=None,  # Override joint_num (2 for BVH, 3 for SMPL-X)
+
     ):
         super().__init__()
-        
+
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.ff_size = ff_size
@@ -36,7 +37,11 @@ class GestureDenoiser(nn.Module):
         self.dropout = dropout
         self.activation = activation
         self.use_exp = use_exp
-        self.joint_num = 3 if not self.use_exp else 4
+        # Use num_body_parts if provided, else fall back to original logic
+        if num_body_parts is not None:
+            self.joint_num = num_body_parts
+        else:
+            self.joint_num = 3 if not self.use_exp else 4
         
         self.sequence_pos_encoder = PositionalEncoding(self.latent_dim, self.dropout)
 
