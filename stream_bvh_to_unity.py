@@ -110,16 +110,21 @@ def axis_angle_to_quaternion(axis_angle):
     return np.array([qx, qy, qz, qw], dtype=np.float32)
 
 
-def convert_body_to_unity(body_frame, coord_fix=1):
+def convert_body_to_unity(body_frame, coord_fix=0):
     """
     Convert 75-joint axis-angle body to Unity's 47-joint quaternion format.
 
     Args:
         body_frame: (225,) array - 75 joints × 3 axis-angle values
-        coord_fix: Coordinate system fix (1 = negate X and Z for Unity)
+        coord_fix: Coordinate system fix:
+                   0 = no fix (Unity receiver handles it)
+                   1 = negate X and Z (only if Unity receiver has coordFix=0)
 
     Returns:
         (188,) array - 47 joints × 4 quaternion values
+
+    NOTE: SimpleEulerReceiver.cs has coordFix=1 by default, which negates X/Z.
+          So we set coord_fix=0 here to avoid double negation.
     """
     rotations = body_frame.reshape(75, 3)
     unity_quats = np.zeros((47, 4), dtype=np.float32)
@@ -129,7 +134,8 @@ def convert_body_to_unity(body_frame, coord_fix=1):
         if bvh_idx < 75:
             axis_angle = rotations[bvh_idx].copy()
 
-            # Coordinate system conversion (BVH Y-up right-handed -> Unity Y-up left-handed)
+            # Coordinate system conversion (only if Unity receiver has coordFix=0)
+            # By default we don't flip here since Unity receiver already does
             if coord_fix == 1:
                 axis_angle[0] = -axis_angle[0]  # Negate X
                 axis_angle[2] = -axis_angle[2]  # Negate Z
@@ -140,7 +146,7 @@ def convert_body_to_unity(body_frame, coord_fix=1):
     return unity_quats.flatten()
 
 
-def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30):
+def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0):
     """
     Stream motion data to Unity via UDP.
 
@@ -150,6 +156,7 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30):
         audio: Optional audio array to play
         audio_sr: Audio sample rate
         fps: Frames per second
+        coord_fix: Coordinate system fix (0=none, 1=negate XZ)
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     n_frames = len(body)
@@ -173,7 +180,7 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30):
 
     for i in range(n_frames):
         # Convert body to Unity format (47 joints × 4 quaternions)
-        body_quats = convert_body_to_unity(body[i])
+        body_quats = convert_body_to_unity(body[i], coord_fix=coord_fix)
 
         # Clip face blendshapes to 0-1 range
         face_frame = np.clip(face[i], 0, 1).astype(np.float32)
@@ -215,6 +222,8 @@ def main():
     parser.add_argument('--port', type=int, default=7777, help='Unity port')
     parser.add_argument('--start_frame', type=int, default=0, help='Start from this frame')
     parser.add_argument('--end_frame', type=int, default=-1, help='End at this frame (-1 = all)')
+    parser.add_argument('--coord_fix', type=int, default=0,
+                        help='Coordinate fix: 0=none (Unity handles it), 1=negate XZ here')
 
     args = parser.parse_args()
 
@@ -267,7 +276,7 @@ def main():
     print("=" * 60)
 
     try:
-        stream_to_unity(body, face, audio=audio, audio_sr=audio_sr, fps=fps)
+        stream_to_unity(body, face, audio=audio, audio_sr=audio_sr, fps=fps, coord_fix=args.coord_fix)
     except KeyboardInterrupt:
         print("\nStopped by user")
 
