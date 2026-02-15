@@ -212,9 +212,13 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=Fals
             spike_ratio = max_vel_recon / (max_vel_input + 1e-7)
 
             # Per-joint velocity ratio (which joints are jittery?)
-            per_joint_input_std = np.std(vel_input, axis=0) + 1e-7  # (D,)
+            per_joint_input_std = np.std(vel_input, axis=0)  # (D,)
             per_joint_recon_std = np.std(vel_recon, axis=0)  # (D,)
-            per_joint_ratio = per_joint_recon_std / per_joint_input_std  # (D,)
+            # Only compute ratio for joints that actually move (std > 0.001)
+            # Stationary joints will have meaningless ratios
+            moving_mask = per_joint_input_std > 0.001
+            per_joint_ratio = np.ones_like(per_joint_input_std)  # default 1.0
+            per_joint_ratio[moving_mask] = per_joint_recon_std[moving_mask] / (per_joint_input_std[moving_mask] + 1e-7)
 
             all_mse.append(mse)
             all_vel_ratio.append(vel_ratio)
@@ -231,8 +235,24 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=Fals
 
     # Per-joint analysis
     avg_per_joint_ratio = np.mean(all_per_joint_vel_ratio, axis=0)  # (D,)
-    worst_joints = np.argsort(avg_per_joint_ratio)[-5:][::-1]  # top 5 jittery joints
-    best_joints = np.argsort(avg_per_joint_ratio)[:5]  # top 5 smooth joints
+
+    # Count stationary joints (input std < 0.001 in all samples)
+    avg_input_std_per_joint = np.mean([np.std(compute_velocity(s['body' if body_part == 'body' else 'face']), axis=0) for s in samples], axis=0)
+    stationary_joints = np.sum(avg_input_std_per_joint < 0.001)
+    moving_joints_mask = avg_input_std_per_joint >= 0.001
+
+    # Only analyze moving joints
+    moving_joint_indices = np.where(moving_joints_mask)[0]
+    moving_ratios = avg_per_joint_ratio[moving_joints_mask]
+
+    if len(moving_joint_indices) > 0:
+        worst_idx = np.argsort(moving_ratios)[-5:][::-1]
+        best_idx = np.argsort(moving_ratios)[:5]
+        worst_joints = moving_joint_indices[worst_idx]
+        best_joints = moving_joint_indices[best_idx]
+    else:
+        worst_joints = []
+        best_joints = []
 
     # Report
     avg_mse = np.mean(all_mse)
@@ -264,27 +284,31 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=Fals
 
     # Per-joint analysis
     if body_part == 'body':
-        joint_names = [f"joint_{i//3}_{'xyz'[i%3]}" for i in range(225)]
-        # Map to approximate body parts (every 3 values = 1 joint)
         print(f"\nPER-JOINT ANALYSIS (75 joints x 3 axes = 225 dims):")
-        print(f"  Worst 5 dimensions (most jittery):")
-        for j in worst_joints:
-            joint_idx = j // 3
-            axis = ['x', 'y', 'z'][j % 3]
-            print(f"    dim {j:3d} (joint {joint_idx:2d} {axis}): ratio = {avg_per_joint_ratio[j]:.2f}")
-        print(f"  Best 5 dimensions (smoothest):")
-        for j in best_joints:
-            joint_idx = j // 3
-            axis = ['x', 'y', 'z'][j % 3]
-            print(f"    dim {j:3d} (joint {joint_idx:2d} {axis}): ratio = {avg_per_joint_ratio[j]:.2f}")
+        print(f"  Stationary dims (ignored): {stationary_joints}")
+        print(f"  Moving dims (analyzed):    {len(moving_joint_indices)}")
+        if len(worst_joints) > 0:
+            print(f"  Worst 5 moving dimensions (most jittery):")
+            for j in worst_joints[:5]:
+                joint_idx = j // 3
+                axis = ['x', 'y', 'z'][j % 3]
+                print(f"    dim {j:3d} (joint {joint_idx:2d} {axis}): ratio = {avg_per_joint_ratio[j]:.2f}")
+            print(f"  Best 5 moving dimensions (smoothest):")
+            for j in best_joints[:5]:
+                joint_idx = j // 3
+                axis = ['x', 'y', 'z'][j % 3]
+                print(f"    dim {j:3d} (joint {joint_idx:2d} {axis}): ratio = {avg_per_joint_ratio[j]:.2f}")
     else:
         print(f"\nPER-BLENDSHAPE ANALYSIS (51 ARKit blendshapes):")
-        print(f"  Worst 5 blendshapes (most jittery):")
-        for j in worst_joints:
-            print(f"    blendshape {j:2d}: ratio = {avg_per_joint_ratio[j]:.2f}")
-        print(f"  Best 5 blendshapes (smoothest):")
-        for j in best_joints:
-            print(f"    blendshape {j:2d}: ratio = {avg_per_joint_ratio[j]:.2f}")
+        print(f"  Stationary blendshapes (ignored): {stationary_joints}")
+        print(f"  Moving blendshapes (analyzed):    {len(moving_joint_indices)}")
+        if len(worst_joints) > 0:
+            print(f"  Worst 5 moving blendshapes (most jittery):")
+            for j in worst_joints[:5]:
+                print(f"    blendshape {j:2d}: ratio = {avg_per_joint_ratio[j]:.2f}")
+            print(f"  Best 5 moving blendshapes (smoothest):")
+            for j in best_joints[:5]:
+                print(f"    blendshape {j:2d}: ratio = {avg_per_joint_ratio[j]:.2f}")
 
     # Interpret results
     print("\n" + "="*50)
@@ -346,13 +370,14 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda', use_latest=Fals
         print(f"  [BAD] Perplexity {avg_perplexity:.0f} - poor code diversity")
         has_issues = True
 
-    # Per-joint issues
-    jittery_joints = np.sum(avg_per_joint_ratio > 2.0)
-    if jittery_joints > 0:
+    # Per-joint issues (only count moving joints)
+    jittery_moving_joints = np.sum(avg_per_joint_ratio[moving_joints_mask] > 2.0) if len(moving_joint_indices) > 0 else 0
+    num_moving = len(moving_joint_indices)
+    if jittery_moving_joints > 0:
         print(f"\nPer-Joint Issues:")
-        print(f"  [WARN] {jittery_joints} dimensions have velocity ratio > 2.0")
-        if jittery_joints > dim_pose * 0.2:
-            print(f"  [BAD] More than 20% of dimensions are jittery!")
+        print(f"  [WARN] {jittery_moving_joints}/{num_moving} moving dimensions have velocity ratio > 2.0")
+        if num_moving > 0 and jittery_moving_joints > num_moving * 0.2:
+            print(f"  [BAD] More than 20% of moving dimensions are jittery!")
             has_issues = True
 
     # Final verdict
