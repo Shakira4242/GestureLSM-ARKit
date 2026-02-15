@@ -78,7 +78,7 @@ model:
       audio_dim: 128
       audio_in: 128
       raw_audio: False
-      latent_dim: 256
+      latent_dim: 512  # Must match denoiser cross_attn dim = latent_dim * num_body_parts = 256 * 2
       audio_fps: 30
       use_exp: False
 
