@@ -130,8 +130,7 @@ python train_vqvae_bvh.py \
     --epochs $VQVAE_EPOCHS \
     --batch_size $VQVAE_BATCH_SIZE \
     --speakers $BEAT_SPEAKERS \
-    --data_path "$DATASET_PATH" \
-    --new_cache
+    --data_path "$DATASET_PATH"
 
 # Check if VQ-VAE body training succeeded
 if [ ! -f "./outputs/vqvae_bvh/body/best.pth" ]; then
