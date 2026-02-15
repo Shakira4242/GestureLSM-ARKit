@@ -59,6 +59,10 @@ def get_args():
     parser.add_argument('--out_dir', type=str, default='./outputs/vqvae_bvh/')
     parser.add_argument('--save_every', type=int, default=20)
 
+    # Resume training
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume from')
+
     return parser.parse_args()
 
 
@@ -141,10 +145,24 @@ def main():
     # Loss
     recon_loss_fn = nn.SmoothL1Loss()
 
-    # Training loop
+    # Resume from checkpoint if specified
+    start_epoch = 1
     best_loss = float('inf')
+    if args.resume and os.path.exists(args.resume):
+        print(f"Resuming from {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ckpt['net'])
+        if 'optimizer' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer'])
+        start_epoch = ckpt.get('epoch', 0) + 1
+        best_loss = ckpt.get('loss', float('inf'))
+        # Step scheduler to correct position
+        for _ in range(start_epoch - 1):
+            scheduler.step()
+        print(f"Resumed from epoch {start_epoch - 1}, best_loss={best_loss:.4f}")
 
-    for epoch in range(1, args.epochs + 1):
+    # Training loop
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         total_loss = 0
         total_recon = 0
