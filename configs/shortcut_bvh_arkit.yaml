@@ -176,6 +176,12 @@ solver:
   weight_decay: 0.0001
   momentum: 0.9
   betas: [0.9, 0.999]
+  # Scheduler config
+  lr_policy: cosine
+  lr_min: 1e-6
+  decay_rate: 0.1
+  warmup_lr: 1e-6
+  warmup_epochs: 5
 
 # GPU
 gpus: [0]
