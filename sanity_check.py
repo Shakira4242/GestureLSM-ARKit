@@ -78,6 +78,7 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     Key metrics:
     - Reconstruction MSE
     - Velocity variance ratio (reconstruction vs original)
+    - Codebook perplexity (are discrete codes being used?)
     - If velocity variance ratio > 2, motion is likely jittery
     """
     print("\n" + "="*60)
@@ -103,6 +104,14 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     if model is None:
         return False
 
+    # Check epoch and warn if too early
+    ckpt = torch.load(ckpt_path, map_location=device)
+    epoch = ckpt.get('epoch', 0)
+    if epoch < 30:
+        print(f"\n[WARNING] Only epoch {epoch} - results may not be reliable!")
+        print("          Wait until epoch 50+ for meaningful metrics.")
+        print("          Running anyway for reference...\n")
+
     # Load dataset
     print("\nLoading dataset samples...")
     cache_path = './datasets/beat_cache/beat_bvh_arkit/train_cache.pkl'
@@ -124,6 +133,8 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     all_vel_ratio = []
     all_input_vel_std = []
     all_recon_vel_std = []
+    all_codes = []
+    all_perplexity = []
 
     with torch.no_grad():
         for i, sample in enumerate(samples):
@@ -145,9 +156,15 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
             # To tensor
             motion_tensor = torch.from_numpy(motion_norm).float().unsqueeze(0).to(device)  # (1, T, D)
 
-            # Reconstruct
+            # Full forward pass (includes quantization)
             output = model(motion_tensor)
             recon = output['rec_pose'].cpu().numpy()[0]  # (T, D)
+            perplexity = output['perplexity'].cpu().numpy()
+            all_perplexity.append(perplexity)
+
+            # Also get the discrete codes to check codebook usage
+            code_idx, _ = model.encode(motion_tensor)
+            all_codes.append(code_idx.cpu().numpy().flatten())
 
             # Denormalize
             recon_denorm = recon * std + mean
@@ -168,11 +185,18 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
             all_input_vel_std.append(vel_input_std)
             all_recon_vel_std.append(vel_recon_std)
 
+    # Codebook usage analysis
+    all_codes_flat = np.concatenate(all_codes)
+    unique_codes = len(np.unique(all_codes_flat))
+    total_codes = 1024  # nb_code
+    codebook_usage = unique_codes / total_codes * 100
+
     # Report
     avg_mse = np.mean(all_mse)
     avg_vel_ratio = np.mean(all_vel_ratio)
     avg_input_vel = np.mean(all_input_vel_std)
     avg_recon_vel = np.mean(all_recon_vel_std)
+    avg_perplexity = np.mean(all_perplexity)
 
     print("\n" + "-"*40)
     print("RESULTS:")
@@ -181,10 +205,16 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     print(f"Input velocity std:     {avg_input_vel:.6f}")
     print(f"Recon velocity std:     {avg_recon_vel:.6f}")
     print(f"Velocity ratio:         {avg_vel_ratio:.3f}")
+    print(f"Codebook usage:         {unique_codes}/{total_codes} ({codebook_usage:.1f}%)")
+    print(f"Perplexity:             {avg_perplexity:.1f}")
     print("-"*40)
 
     # Interpret results
     print("\nINTERPRETATION:")
+
+    # Epoch warning
+    if epoch < 30:
+        print(f"  [WAIT] Epoch {epoch} is too early for reliable metrics")
 
     # MSE check
     if avg_mse < 0.1:
@@ -203,6 +233,27 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
         print(f"  [BAD] Velocity ratio {avg_vel_ratio:.2f} - JITTERY MOTION!")
         print("        This is the problem you had before!")
         return False
+
+    # Codebook usage check
+    if codebook_usage > 30:
+        print(f"  [OK] Codebook usage {codebook_usage:.0f}% - codes are being used")
+    elif codebook_usage > 10:
+        print(f"  [WARN] Codebook usage {codebook_usage:.0f}% - low but acceptable")
+    else:
+        print(f"  [BAD] Codebook usage {codebook_usage:.0f}% - CODEBOOK COLLAPSE!")
+        print("        Model is using too few codes, will lose motion detail")
+
+    # Perplexity check (higher = more codes used = better)
+    if avg_perplexity > 100:
+        print(f"  [OK] Perplexity {avg_perplexity:.0f} - good code diversity")
+    elif avg_perplexity > 20:
+        print(f"  [WARN] Perplexity {avg_perplexity:.0f} - moderate code diversity")
+    else:
+        print(f"  [BAD] Perplexity {avg_perplexity:.0f} - poor code diversity")
+
+    if epoch < 30:
+        print("\n[WAIT] Run again after epoch 50+ for reliable results")
+        return True  # Don't fail early
 
     print("\n[PASS] VQ-VAE looks healthy!")
     return True
@@ -253,15 +304,33 @@ def check_pipeline(audio_path=None, device='cuda'):
 
     print("Models loaded!")
 
-    # Test with dummy audio if no audio provided
+    # Find audio from dataset if not provided
     if audio_path is None:
-        print("\nNo audio provided, using dummy input for latency test...")
-        # Simulate 4 seconds of audio features (30fps = 120 frames)
-        dummy_mel = torch.randn(1, 120, 128).to(device)
-    else:
-        print(f"\nLoading audio: {audio_path}")
+        print("\nLooking for audio in dataset...")
+        dataset_path = './datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1'
+        audio_path = None
+
+        # Find first available wav file
+        for speaker in ['1', '2', '3', '4']:
+            speaker_dir = os.path.join(dataset_path, speaker)
+            if os.path.exists(speaker_dir):
+                wav_files = [f for f in os.listdir(speaker_dir) if f.endswith('.wav')]
+                if wav_files:
+                    audio_path = os.path.join(speaker_dir, wav_files[0])
+                    break
+
+        if audio_path is None:
+            print("No audio found in dataset, using dummy input...")
+            dummy_mel = torch.randn(1, 120, 128).to(device)
+        else:
+            print(f"Using dataset audio: {os.path.basename(audio_path)}")
+
+    if audio_path is not None:
+        print(f"Loading audio: {audio_path}")
         import librosa
         audio, sr = librosa.load(audio_path, sr=16000)
+        # Limit to 10 seconds for quick test
+        audio = audio[:16000 * 10]
         # Compute mel spectrogram
         audio_18k = librosa.resample(audio, orig_sr=16000, target_sr=18000)
         mel = librosa.feature.melspectrogram(y=audio_18k, sr=18000, hop_length=1200, n_mels=128)
