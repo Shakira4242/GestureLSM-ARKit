@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dataloaders.build_vocab import Vocab
 sys.modules['__main__'].Vocab = Vocab
 
-from utils import config, other_tools
+from utils import other_tools
 from models.vq.model import RVQVAE
 from dataloaders.pymo.parsers import BVHParser
 from dataloaders.pymo.writers import BVHWriter
@@ -459,25 +459,31 @@ def find_test_audio(data_path):
 def main():
     import argparse
 
-    # Parse our CLI args first, before config parser sees them
-    parser = argparse.ArgumentParser(description='GestureLSM BVH Inference')
-    parser.add_argument('--audio', type=str, default=None, help='Path to input audio file (auto-finds from dataset if not provided)')
+    # Parse our CLI args BEFORE importing config (which uses configargparse)
+    parser = argparse.ArgumentParser(description='GestureLSM BVH Inference', add_help=False)
+    parser.add_argument('--audio', type=str, default=None, help='Path to input audio file')
     parser.add_argument('--output', type=str, default='output_bvh_motion.npz', help='Output path')
     parser.add_argument('--config', type=str, default='configs/shortcut_bvh_arkit.yaml')
-    parser.add_argument('--checkpoint', type=str, default=None, help='Generator checkpoint (default: best.pth)')
+    parser.add_argument('--checkpoint', type=str, default=None, help='Generator checkpoint')
 
-    # Parse known args to avoid conflict with config parser
-    cli_args, remaining = parser.parse_known_args()
+    # Parse only known args
+    cli_args, _ = parser.parse_known_args()
 
     print("=" * 60)
     print("GestureLSM BVH Inference")
     print("=" * 60)
     print(f"Device: {device}")
+    print(f"Config: {cli_args.config}")
+    print(f"Checkpoint: {cli_args.checkpoint}")
+    print(f"Output: {cli_args.output}")
 
-    # Load config - override sys.argv completely
+    # Load config - override sys.argv to only pass config file
     original_argv = sys.argv
     sys.argv = ['run_inference_bvh.py', '-c', cli_args.config]
-    args, cfg = config.parse_args()
+
+    # Import and parse config
+    from utils import config as cfg_module
+    args, cfg = cfg_module.parse_args()
     sys.argv = original_argv  # Restore
 
     # Find audio if not provided
