@@ -1074,12 +1074,15 @@ class CustomTrainer(BaseTrainer):
         self.tracker.reset()
         self.model.eval()
 
+        # If test_loader is None (skip_eval_model=True), use train_loader sample
+        data_loader = self.test_loader if self.test_loader is not None else self.train_loader
+
         total_loss = 0
         total_samples = 0
         start_time = time.time()
 
         with torch.no_grad():
-            for its, batch_data in enumerate(self.test_loader):
+            for its, batch_data in enumerate(data_loader):
                 if its > 15:  # Limit validation iterations
                     break
 
@@ -1229,12 +1232,15 @@ class CustomTrainer(BaseTrainer):
         results_save_path = self.checkpoint_path + f"/{epoch}/"
         os.makedirs(results_save_path, exist_ok=True)
 
+        # If test_loader is None (skip_eval_model=True), use train_loader sample
+        data_loader = self.test_loader if self.test_loader is not None else self.train_loader
+
         self.model.eval()
         total_samples = 0
         start_time = time.time()
 
         with torch.no_grad():
-            for its, batch_data in enumerate(tqdm(self.test_loader, desc="Testing BVH")):
+            for its, batch_data in enumerate(tqdm(data_loader, desc="Testing BVH")):
                 loaded_data = self._load_data(batch_data)
                 net_out = self._g_test_bvh(loaded_data)
 
