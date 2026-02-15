@@ -135,6 +135,8 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     all_recon_vel_std = []
     all_codes = []
     all_perplexity = []
+    all_spike_ratio = []
+    all_per_joint_vel_ratio = []
 
     with torch.no_grad():
         for i, sample in enumerate(samples):
@@ -180,10 +182,22 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
             vel_recon_std = np.std(vel_recon)
             vel_ratio = vel_recon_std / (vel_input_std + 1e-7)
 
+            # Spike detection (catches single bad frames)
+            max_vel_input = np.max(np.abs(vel_input))
+            max_vel_recon = np.max(np.abs(vel_recon))
+            spike_ratio = max_vel_recon / (max_vel_input + 1e-7)
+
+            # Per-joint velocity ratio (which joints are jittery?)
+            per_joint_input_std = np.std(vel_input, axis=0) + 1e-7  # (D,)
+            per_joint_recon_std = np.std(vel_recon, axis=0)  # (D,)
+            per_joint_ratio = per_joint_recon_std / per_joint_input_std  # (D,)
+
             all_mse.append(mse)
             all_vel_ratio.append(vel_ratio)
             all_input_vel_std.append(vel_input_std)
             all_recon_vel_std.append(vel_recon_std)
+            all_spike_ratio.append(spike_ratio)
+            all_per_joint_vel_ratio.append(per_joint_ratio)
 
     # Codebook usage analysis
     all_codes_flat = np.concatenate(all_codes)
@@ -191,40 +205,87 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     total_codes = 1024  # nb_code
     codebook_usage = unique_codes / total_codes * 100
 
+    # Per-joint analysis
+    avg_per_joint_ratio = np.mean(all_per_joint_vel_ratio, axis=0)  # (D,)
+    worst_joints = np.argsort(avg_per_joint_ratio)[-5:][::-1]  # top 5 jittery joints
+    best_joints = np.argsort(avg_per_joint_ratio)[:5]  # top 5 smooth joints
+
     # Report
     avg_mse = np.mean(all_mse)
     avg_vel_ratio = np.mean(all_vel_ratio)
     avg_input_vel = np.mean(all_input_vel_std)
     avg_recon_vel = np.mean(all_recon_vel_std)
     avg_perplexity = np.mean(all_perplexity)
+    avg_spike_ratio = np.mean(all_spike_ratio)
+    max_spike_ratio = np.max(all_spike_ratio)
 
-    print("\n" + "-"*40)
+    print("\n" + "-"*50)
     print("RESULTS:")
-    print("-"*40)
-    print(f"Reconstruction MSE:     {avg_mse:.6f}")
-    print(f"Input velocity std:     {avg_input_vel:.6f}")
-    print(f"Recon velocity std:     {avg_recon_vel:.6f}")
-    print(f"Velocity ratio:         {avg_vel_ratio:.3f}")
-    print(f"Codebook usage:         {unique_codes}/{total_codes} ({codebook_usage:.1f}%)")
-    print(f"Perplexity:             {avg_perplexity:.1f}")
-    print("-"*40)
+    print("-"*50)
+    print(f"Reconstruction MSE:       {avg_mse:.6f}")
+    print(f"")
+    print(f"VELOCITY (frame-to-frame smoothness):")
+    print(f"  Input velocity std:     {avg_input_vel:.6f}")
+    print(f"  Recon velocity std:     {avg_recon_vel:.6f}")
+    print(f"  Velocity ratio (avg):   {avg_vel_ratio:.3f}  {'[OK]' if avg_vel_ratio < 1.5 else '[BAD]' if avg_vel_ratio > 2 else '[WARN]'}")
+    print(f"")
+    print(f"SPIKE DETECTION (single bad frames):")
+    print(f"  Spike ratio (avg):      {avg_spike_ratio:.3f}  {'[OK]' if avg_spike_ratio < 2 else '[BAD]' if avg_spike_ratio > 3 else '[WARN]'}")
+    print(f"  Spike ratio (worst):    {max_spike_ratio:.3f}  {'[OK]' if max_spike_ratio < 3 else '[BAD]' if max_spike_ratio > 5 else '[WARN]'}")
+    print(f"")
+    print(f"CODEBOOK:")
+    print(f"  Usage:                  {unique_codes}/{total_codes} ({codebook_usage:.1f}%)")
+    print(f"  Perplexity:             {avg_perplexity:.1f}")
+    print("-"*50)
+
+    # Per-joint analysis
+    if body_part == 'body':
+        joint_names = [f"joint_{i//3}_{'xyz'[i%3]}" for i in range(225)]
+        # Map to approximate body parts (every 3 values = 1 joint)
+        print(f"\nPER-JOINT ANALYSIS (75 joints x 3 axes = 225 dims):")
+        print(f"  Worst 5 dimensions (most jittery):")
+        for j in worst_joints:
+            joint_idx = j // 3
+            axis = ['x', 'y', 'z'][j % 3]
+            print(f"    dim {j:3d} (joint {joint_idx:2d} {axis}): ratio = {avg_per_joint_ratio[j]:.2f}")
+        print(f"  Best 5 dimensions (smoothest):")
+        for j in best_joints:
+            joint_idx = j // 3
+            axis = ['x', 'y', 'z'][j % 3]
+            print(f"    dim {j:3d} (joint {joint_idx:2d} {axis}): ratio = {avg_per_joint_ratio[j]:.2f}")
+    else:
+        print(f"\nPER-BLENDSHAPE ANALYSIS (51 ARKit blendshapes):")
+        print(f"  Worst 5 blendshapes (most jittery):")
+        for j in worst_joints:
+            print(f"    blendshape {j:2d}: ratio = {avg_per_joint_ratio[j]:.2f}")
+        print(f"  Best 5 blendshapes (smoothest):")
+        for j in best_joints:
+            print(f"    blendshape {j:2d}: ratio = {avg_per_joint_ratio[j]:.2f}")
 
     # Interpret results
-    print("\nINTERPRETATION:")
+    print("\n" + "="*50)
+    print("INTERPRETATION:")
+    print("="*50)
+
+    has_issues = False
 
     # Epoch warning
     if epoch < 30:
-        print(f"  [WAIT] Epoch {epoch} is too early for reliable metrics")
+        print(f"\n[WAIT] Epoch {epoch} is too early for reliable metrics")
+        print("       Run again after epoch 50+")
 
     # MSE check
+    print(f"\nReconstruction Quality:")
     if avg_mse < 0.1:
         print(f"  [OK] MSE is low ({avg_mse:.4f}) - good reconstruction")
     elif avg_mse < 0.5:
         print(f"  [WARN] MSE is moderate ({avg_mse:.4f}) - acceptable")
     else:
         print(f"  [BAD] MSE is high ({avg_mse:.4f}) - poor reconstruction")
+        has_issues = True
 
     # Velocity ratio check (KEY METRIC for jitter)
+    print(f"\nSmoothness (THE KEY METRIC):")
     if avg_vel_ratio < 1.2:
         print(f"  [OK] Velocity ratio {avg_vel_ratio:.2f} - smooth motion preserved")
     elif avg_vel_ratio < 2.0:
@@ -232,9 +293,17 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     else:
         print(f"  [BAD] Velocity ratio {avg_vel_ratio:.2f} - JITTERY MOTION!")
         print("        This is the problem you had before!")
-        return False
+        has_issues = True
+
+    # Spike check
+    if max_spike_ratio > 5:
+        print(f"  [BAD] Spike ratio {max_spike_ratio:.2f} - individual frames are jumping!")
+        has_issues = True
+    elif max_spike_ratio > 3:
+        print(f"  [WARN] Spike ratio {max_spike_ratio:.2f} - some frame spikes detected")
 
     # Codebook usage check
+    print(f"\nCodebook Health:")
     if codebook_usage > 30:
         print(f"  [OK] Codebook usage {codebook_usage:.0f}% - codes are being used")
     elif codebook_usage > 10:
@@ -242,6 +311,7 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
     else:
         print(f"  [BAD] Codebook usage {codebook_usage:.0f}% - CODEBOOK COLLAPSE!")
         print("        Model is using too few codes, will lose motion detail")
+        has_issues = True
 
     # Perplexity check (higher = more codes used = better)
     if avg_perplexity > 100:
@@ -250,13 +320,28 @@ def check_vqvae(body_part='body', num_samples=10, device='cuda'):
         print(f"  [WARN] Perplexity {avg_perplexity:.0f} - moderate code diversity")
     else:
         print(f"  [BAD] Perplexity {avg_perplexity:.0f} - poor code diversity")
+        has_issues = True
 
+    # Per-joint issues
+    jittery_joints = np.sum(avg_per_joint_ratio > 2.0)
+    if jittery_joints > 0:
+        print(f"\nPer-Joint Issues:")
+        print(f"  [WARN] {jittery_joints} dimensions have velocity ratio > 2.0")
+        if jittery_joints > dim_pose * 0.2:
+            print(f"  [BAD] More than 20% of dimensions are jittery!")
+            has_issues = True
+
+    # Final verdict
+    print("\n" + "-"*50)
     if epoch < 30:
-        print("\n[WAIT] Run again after epoch 50+ for reliable results")
+        print("[WAIT] Run again after epoch 50+ for reliable results")
         return True  # Don't fail early
-
-    print("\n[PASS] VQ-VAE looks healthy!")
-    return True
+    elif has_issues:
+        print("[FAIL] VQ-VAE has issues - review above")
+        return False
+    else:
+        print("[PASS] VQ-VAE looks healthy!")
+        return True
 
 
 def check_pipeline(audio_path=None, device='cuda'):
