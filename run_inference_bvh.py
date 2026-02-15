@@ -142,9 +142,11 @@ def prepare_seed_from_data(data_path, vq_models, norm, args):
     else:
         raise ValueError(f"Unknown cache structure: {type(cache)}")
 
-    # Get body and face data
-    body = torch.from_numpy(sample['pose'][:args.pose_length]).float().to(device)
-    face = torch.from_numpy(sample['facial'][:args.pose_length]).float().to(device)
+    # Get body and face data (keys are 'body' and 'face' in BVH cache)
+    body_key = 'body' if 'body' in sample else 'pose'
+    face_key = 'face' if 'face' in sample else 'facial'
+    body = torch.from_numpy(sample[body_key][:args.pose_length]).float().to(device)
+    face = torch.from_numpy(sample[face_key][:args.pose_length]).float().to(device)
 
     # Normalize
     body_norm = (body - norm['body_mean']) / norm['body_std']
