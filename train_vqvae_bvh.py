@@ -159,8 +159,8 @@ def main():
 
             # Forward
             output = model(motion)
-            # Output is (B, dim, T), need to transpose back to (B, T, dim)
-            pred_motion = output['rec_pose'].permute(0, 2, 1)
+            # Decoder already outputs (B, T, dim) - see encdec.py line 128
+            pred_motion = output['rec_pose']
             commit_loss = output['commit_loss']
 
             # Reconstruction loss
