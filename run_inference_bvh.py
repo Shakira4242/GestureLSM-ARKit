@@ -362,21 +362,27 @@ def find_test_audio(data_path):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser()
+
+    # Parse our CLI args first, before config parser sees them
+    parser = argparse.ArgumentParser(description='GestureLSM BVH Inference')
     parser.add_argument('--audio', type=str, default=None, help='Path to input audio file (auto-finds from dataset if not provided)')
     parser.add_argument('--output', type=str, default='output_bvh_motion.npz', help='Output path')
     parser.add_argument('--config', type=str, default='configs/shortcut_bvh_arkit.yaml')
     parser.add_argument('--checkpoint', type=str, default=None, help='Generator checkpoint (default: best.pth)')
-    cli_args = parser.parse_args()
+
+    # Parse known args to avoid conflict with config parser
+    cli_args, remaining = parser.parse_known_args()
 
     print("=" * 60)
     print("GestureLSM BVH Inference")
     print("=" * 60)
     print(f"Device: {device}")
 
-    # Load config
-    sys.argv = ['', '-c', cli_args.config]
+    # Load config - override sys.argv completely
+    original_argv = sys.argv
+    sys.argv = ['run_inference_bvh.py', '-c', cli_args.config]
     args, cfg = config.parse_args()
+    sys.argv = original_argv  # Restore
 
     # Find audio if not provided
     audio_path = cli_args.audio
