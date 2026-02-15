@@ -115,7 +115,13 @@ class ModalityEncoder(nn.Module):
         # Initial features extraction - single transpose each
         # [B, T, D] -> [T, B, D]
         audio_feat = self.WavEncoder(audio)
-        text_feat = self.text_encoder_body(self.text_pre_encoder_body(word))
+
+        # Handle case where word is None (e.g., BVH mode with no text)
+        if word is not None:
+            text_feat = self.text_encoder_body(self.text_pre_encoder_body(word))
+        else:
+            # Create zero tensor matching audio_feat shape [B, T, audio_dim]
+            text_feat = torch.zeros_like(audio_feat)
         if raw_audio is not None and self.raw_audio:
             # Keep the same transpose pattern for consistency
             # raw_feat = self.extract_wavlm_feats(raw_audio)
