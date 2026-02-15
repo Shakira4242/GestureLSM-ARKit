@@ -614,7 +614,7 @@ def main():
     bvh_path = base_path + '.bvh'
     json_path = base_path + '_arkit.json'
 
-    # Save NPZ (raw data)
+    # Save NPZ (raw data + audio path for playback)
     np.savez(npz_path,
         body=body_np,  # [T, 225] axis-angle
         face=face_np,  # [T, 51] ARKit blendshapes
@@ -622,6 +622,7 @@ def main():
         format='bvh_arkit',
         body_dims=225,
         face_dims=51,
+        audio_path=audio_path,  # Source audio for sync playback
     )
     print(f"   NPZ saved: {npz_path}")
 

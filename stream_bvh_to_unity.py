@@ -148,7 +148,7 @@ def convert_body_to_unity(body_frame, coord_fix=0):
 
 def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0):
     """
-    Stream motion data to Unity via UDP.
+    Stream motion data to Unity via UDP with millisecond-accurate audio sync.
 
     Args:
         body: (N, 225) array - body motion (75 joints × 3 axis-angle)
@@ -161,53 +161,90 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     n_frames = len(body)
     frame_time = 1.0 / fps
+    frame_time_ns = int(frame_time * 1e9)  # Nanoseconds for precision
 
     print(f"Streaming {n_frames} frames at {fps} FPS to {UNITY_HOST}:{UNITY_PORT}")
     print(f"Duration: {n_frames / fps:.1f}s")
     print(f"Body shape: {body.shape}, Face shape: {face.shape}")
 
-    # Start audio playback if provided
+    # Pre-convert all body frames to quaternions for faster streaming
+    print("Pre-processing body data...")
+    body_quats_all = np.zeros((n_frames, 188), dtype=np.float32)
+    for i in range(n_frames):
+        body_quats_all[i] = convert_body_to_unity(body[i], coord_fix=coord_fix)
+
+    # Pre-clip face data
+    face_clipped = np.clip(face, 0, 1).astype(np.float32)
+    print("Pre-processing done.")
+
+    # Setup audio
+    sd = None
     if audio is not None:
         try:
             import sounddevice as sd
-            sd.play(audio, audio_sr)
-            print("Playing audio...")
         except ImportError:
             print("Warning: sounddevice not installed, skipping audio playback")
             audio = None
 
-    start_time = time.perf_counter()
+    # Countdown for sync
+    print("\nStarting in...")
+    for i in range(3, 0, -1):
+        print(f"  {i}...")
+        time.sleep(1)
+    print("  GO!")
 
+    # Start audio and motion simultaneously
+    if audio is not None and sd is not None:
+        # Use low-latency settings for better sync
+        sd.play(audio, audio_sr, blocking=False)
+
+    # Record precise start time IMMEDIATELY after audio starts
+    start_time_ns = time.perf_counter_ns()
+
+    dropped_frames = 0
     for i in range(n_frames):
-        # Convert body to Unity format (47 joints × 4 quaternions)
-        body_quats = convert_body_to_unity(body[i], coord_fix=coord_fix)
-
-        # Clip face blendshapes to 0-1 range
-        face_frame = np.clip(face[i], 0, 1).astype(np.float32)
-
-        # Combine into single packet: 188 body + 51 face = 239 floats
-        packet = np.concatenate([body_quats, face_frame]).astype(np.float32)
+        # Combine pre-computed body + face into packet
+        packet = np.concatenate([body_quats_all[i], face_clipped[i]]).astype(np.float32)
 
         # Send UDP packet
         sock.sendto(packet.tobytes(), (UNITY_HOST, UNITY_PORT))
 
-        # Progress update every 100 frames
-        if i % 100 == 0:
-            print(f"  Frame {i}/{n_frames} ({100*i/n_frames:.1f}%)")
+        # Progress update every 300 frames (less frequent = less overhead)
+        if i % 300 == 0:
+            elapsed = (time.perf_counter_ns() - start_time_ns) / 1e9
+            expected = i / fps
+            drift_ms = (elapsed - expected) * 1000
+            print(f"  Frame {i}/{n_frames} ({100*i/n_frames:.1f}%) | Drift: {drift_ms:+.1f}ms")
 
-        # Timing control
-        target_time = start_time + (i + 1) * frame_time
-        sleep_time = target_time - time.perf_counter()
-        if sleep_time > 0:
-            time.sleep(sleep_time)
+        # High-precision timing control
+        target_time_ns = start_time_ns + (i + 1) * frame_time_ns
+        now_ns = time.perf_counter_ns()
+        sleep_ns = target_time_ns - now_ns
+
+        if sleep_ns > 1_000_000:  # More than 1ms to wait
+            # Sleep for most of the time, then busy-wait for precision
+            time.sleep((sleep_ns - 500_000) / 1e9)  # Leave 0.5ms for busy-wait
+            while time.perf_counter_ns() < target_time_ns:
+                pass  # Busy-wait for final precision
+        elif sleep_ns > 0:
+            # Very short wait - just busy-wait
+            while time.perf_counter_ns() < target_time_ns:
+                pass
+        else:
+            # We're behind - skip sleep but track it
+            dropped_frames += 1
+
+    # Final stats
+    total_time = (time.perf_counter_ns() - start_time_ns) / 1e9
+    expected_time = n_frames / fps
+    print(f"\nFinished: {n_frames} frames in {total_time:.2f}s (expected {expected_time:.2f}s)")
+    print(f"Final drift: {(total_time - expected_time)*1000:+.1f}ms")
+    if dropped_frames > 0:
+        print(f"Dropped frames: {dropped_frames} ({100*dropped_frames/n_frames:.1f}%)")
 
     # Wait for audio to finish
-    if audio is not None:
-        try:
-            import sounddevice as sd
-            sd.wait()
-        except:
-            pass
+    if audio is not None and sd is not None:
+        sd.wait()
 
     sock.close()
     print("Done!")
@@ -258,14 +295,35 @@ def main():
     face = face[start:end]
     print(f"Frames: {start} to {end} ({len(body)} total)")
 
-    # Load audio if provided
+    # Load audio - prefer explicit --audio, then check NPZ for stored audio_path
     audio = None
     audio_sr = 16000
-    if args.audio:
+    audio_file = args.audio
+
+    # If no --audio provided, check if NPZ has the source audio path
+    if audio_file is None and 'audio_path' in data.files:
+        stored_path = str(data['audio_path'])
+        print(f"Found audio_path in NPZ: {stored_path}")
+        # Check if file exists locally or in common locations
+        import os
+        possible_paths = [
+            stored_path,
+            os.path.basename(stored_path),
+            os.path.join(os.path.dirname(args.npz), os.path.basename(stored_path)),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                audio_file = path
+                print(f"Using audio: {audio_file}")
+                break
+        if audio_file is None:
+            print(f"Audio file not found locally. To play audio, provide --audio <path>")
+
+    if audio_file:
         try:
             import librosa
-            audio, audio_sr = librosa.load(args.audio, sr=16000)
-            print(f"Audio: {args.audio} ({len(audio)/audio_sr:.1f}s)")
+            audio, audio_sr = librosa.load(audio_file, sr=16000)
+            print(f"Audio loaded: {audio_file} ({len(audio)/audio_sr:.1f}s)")
         except ImportError:
             print("Warning: librosa not installed, skipping audio")
         except Exception as e:
