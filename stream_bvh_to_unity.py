@@ -300,35 +300,29 @@ def main():
     face = face[start:end]
     print(f"Frames: {start} to {end} ({len(body)} total)")
 
-    # Load audio - check multiple locations
+    # Load audio - prefer explicit --audio, then check NPZ for stored audio_path
     audio = None
     audio_sr = 16000
     audio_file = args.audio
-    import os
 
-    # If no --audio provided, look for matching _audio.wav file first
-    if audio_file is None:
-        # Check for <npz_name>_audio.wav (created by run_inference_bvh.py)
-        auto_audio = args.npz.replace('.npz', '_audio.wav')
-        if os.path.exists(auto_audio):
-            audio_file = auto_audio
-            print(f"Found matching audio: {audio_file}")
-        # Fall back to audio_path stored in NPZ
-        elif 'audio_path' in data.files:
-            stored_path = str(data['audio_path'])
-            print(f"Found audio_path in NPZ: {stored_path}")
-            possible_paths = [
-                stored_path,
-                os.path.basename(stored_path),
-                os.path.join(os.path.dirname(args.npz), os.path.basename(stored_path)),
-            ]
-            for path in possible_paths:
-                if os.path.exists(path):
-                    audio_file = path
-                    print(f"Using audio: {audio_file}")
-                    break
+    # If no --audio provided, check if NPZ has the source audio path
+    if audio_file is None and 'audio_path' in data.files:
+        stored_path = str(data['audio_path'])
+        print(f"Found audio_path in NPZ: {stored_path}")
+        # Check if file exists locally or in common locations
+        import os
+        possible_paths = [
+            stored_path,
+            os.path.basename(stored_path),
+            os.path.join(os.path.dirname(args.npz), os.path.basename(stored_path)),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                audio_file = path
+                print(f"Using audio: {audio_file}")
+                break
         if audio_file is None:
-            print(f"No audio file found. To play audio, provide --audio <path>")
+            print(f"Audio file not found locally. To play audio, provide --audio <path>")
 
     if audio_file:
         try:
