@@ -17,12 +17,15 @@ echo "GestureLSM BVH + ARKit Training Pipeline"
 echo "=========================================="
 
 # Configuration - optimized for H100
-BEAT_SPEAKERS="1 2 3 4"      # Train on 4 speakers
-VQVAE_EPOCHS=100
-GENERATOR_EPOCHS=500
+# Change BEAT_SPEAKERS to train on more speakers (1-30 available)
+BEAT_SPEAKERS="1 2 3 4"      # Default: 4 speakers. Use "$(seq 1 30)" for all 30
+VQVAE_EPOCHS=100             # Increase for better quality (e.g., 300-500)
+GENERATOR_EPOCHS=500         # Increase for better quality (e.g., 1000-2000)
 VQVAE_BATCH_SIZE=256         # H100 can handle larger batches
 GENERATOR_BATCH_SIZE=256     # H100 80GB VRAM
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
+CACHE_PATH="./datasets/beat_cache/beat_bvh_arkit/"
+NUM_CACHE_WORKERS=32         # Parallel workers for cache building
 
 # HuggingFace token for faster downloads (optional but recommended)
 # Set HF_TOKEN env var before running: export HF_TOKEN="your_token_here"
@@ -117,6 +120,24 @@ if [ $FOUND_SPEAKER -eq 0 ]; then
 fi
 
 echo "Dataset ready!"
+
+# Step 1.5: Build cache FAST with parallel processing
+echo ""
+echo "[Step 1.5] Building cache with parallel processing..."
+echo "Speakers: $BEAT_SPEAKERS"
+echo "Workers: $NUM_CACHE_WORKERS"
+
+python build_cache_fast.py \
+    --data_path "$DATASET_PATH" \
+    --cache_path "$CACHE_PATH" \
+    --speakers $BEAT_SPEAKERS \
+    --workers $NUM_CACHE_WORKERS
+
+if [ ! -f "$CACHE_PATH/train_cache.pkl" ]; then
+    echo "ERROR: Cache building failed!"
+    exit 1
+fi
+echo "Cache built successfully!"
 
 # Step 2: Train VQ-VAE for body
 echo ""
