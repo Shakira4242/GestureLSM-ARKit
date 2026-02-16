@@ -614,6 +614,20 @@ def main():
     bvh_path = base_path + '.bvh'
     json_path = base_path + '_arkit.json'
 
+    # Save trimmed audio that matches motion duration
+    audio_out_path = base_path + '_audio.wav'
+    try:
+        import librosa
+        import soundfile as sf
+        audio_raw, sr = librosa.load(audio_path, sr=16000)
+        motion_duration = len(body_np) / args.pose_fps
+        audio_trimmed = audio_raw[:int(motion_duration * sr)]
+        sf.write(audio_out_path, audio_trimmed, sr)
+        print(f"   Audio saved: {audio_out_path} ({motion_duration:.1f}s)")
+    except Exception as e:
+        print(f"   Audio save failed: {e}")
+        audio_out_path = audio_path  # Fall back to original
+
     # Save NPZ (raw data + audio path for playback)
     np.savez(npz_path,
         body=body_np,  # [T, 225] axis-angle
@@ -622,7 +636,7 @@ def main():
         format='bvh_arkit',
         body_dims=225,
         face_dims=51,
-        audio_path=audio_path,  # Source audio for sync playback
+        audio_path=audio_out_path,  # Trimmed audio for sync playback
     )
     print(f"   NPZ saved: {npz_path}")
 
