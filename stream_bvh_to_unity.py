@@ -172,16 +172,19 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0)
 
     # Save audio to temp file for playback
     audio_process = None
+    temp_wav_path = None
     if audio is not None:
         try:
             import soundfile as sf
             temp_wav = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            sf.write(temp_wav.name, audio, audio_sr)
+            temp_wav_path = temp_wav.name
+            sf.write(temp_wav_path, audio, audio_sr)
             temp_wav.close()
-            print(f"Audio ready: {len(audio)/audio_sr:.1f}s")
+            print(f"Audio saved to: {temp_wav_path}")
+            print(f"Audio duration: {len(audio)/audio_sr:.1f}s")
         except Exception as e:
             print(f"Audio setup failed: {e}")
-            audio = None
+            temp_wav_path = None
 
     print("\n3...")
     time.sleep(1)
@@ -192,8 +195,9 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0)
     print("GO!")
 
     # Start audio with afplay (macOS) at the SAME TIME as first frame
-    if audio is not None:
-        audio_process = subprocess.Popen(['afplay', temp_wav.name])
+    if temp_wav_path is not None:
+        print(f"Starting audio: afplay {temp_wav_path}")
+        audio_process = subprocess.Popen(['afplay', temp_wav_path])
 
     start_time = time.perf_counter()
 
@@ -215,7 +219,8 @@ def stream_to_unity(body, face, audio=None, audio_sr=16000, fps=30, coord_fix=0)
     # Cleanup
     if audio_process:
         audio_process.wait()
-        os.unlink(temp_wav.name)
+    if temp_wav_path and os.path.exists(temp_wav_path):
+        os.unlink(temp_wav_path)
 
     sock.close()
     print("Done!")
