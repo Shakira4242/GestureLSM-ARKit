@@ -16,16 +16,27 @@ echo "=========================================="
 echo "GestureLSM BVH + ARKit Training Pipeline"
 echo "=========================================="
 
-# Configuration - optimized for H100
-# Change BEAT_SPEAKERS to train on more speakers (1-30 available)
-BEAT_SPEAKERS="1 2 3 4"      # Default: 4 speakers. Use "$(seq 1 30)" for all 30
-VQVAE_EPOCHS=100             # Increase for better quality (e.g., 300-500)
-GENERATOR_EPOCHS=500         # Increase for better quality (e.g., 1000-2000)
-VQVAE_BATCH_SIZE=256         # H100 can handle larger batches
-GENERATOR_BATCH_SIZE=256     # H100 80GB VRAM
+# =============================================================================
+# Configuration - OPTIMIZED FOR H100 SXM 80GB + 26 vCPU
+# =============================================================================
+# Speakers: Use "$(seq 1 30)" for all 30 speakers
+BEAT_SPEAKERS="1 2 3 4"
+
+# Epochs - increase for production quality
+VQVAE_EPOCHS=300             # Was 100, bump for better reconstruction
+GENERATOR_EPOCHS=1000        # Was 500, more epochs = smoother motion
+
+# Batch sizes - MAXED for H100 80GB VRAM
+VQVAE_BATCH_SIZE=512         # Was 256, H100 can easily handle 512
+GENERATOR_BATCH_SIZE=384     # Was 256, transformer limited by sequence length
+
+# Paths
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 CACHE_PATH="./datasets/beat_cache/beat_bvh_arkit/"
-NUM_CACHE_WORKERS=32         # Parallel workers for cache building
+
+# Workers - match vCPU count (26 cores on your pod)
+NUM_CACHE_WORKERS=24         # Leave 2 cores for system
+NUM_DATA_WORKERS=8           # Dataloader workers
 
 # HuggingFace token for faster downloads (optional but recommended)
 # Set HF_TOKEN env var before running: export HF_TOKEN="your_token_here"
@@ -151,7 +162,9 @@ python train_vqvae_bvh.py \
     --epochs $VQVAE_EPOCHS \
     --batch_size $VQVAE_BATCH_SIZE \
     --speakers $BEAT_SPEAKERS \
-    --data_path "$DATASET_PATH"
+    --data_path "$DATASET_PATH" \
+    --cache_path "$CACHE_PATH" \
+    --num_workers $NUM_DATA_WORKERS
 
 # Check if VQ-VAE body training succeeded
 if [ ! -f "./outputs/vqvae_bvh/body/best.pth" ]; then
@@ -168,7 +181,9 @@ python train_vqvae_bvh.py \
     --epochs $VQVAE_EPOCHS \
     --batch_size $VQVAE_BATCH_SIZE \
     --speakers $BEAT_SPEAKERS \
-    --data_path "$DATASET_PATH"
+    --data_path "$DATASET_PATH" \
+    --cache_path "$CACHE_PATH" \
+    --num_workers $NUM_DATA_WORKERS
 
 # Check if VQ-VAE face training succeeded
 if [ ! -f "./outputs/vqvae_bvh/face/best.pth" ]; then

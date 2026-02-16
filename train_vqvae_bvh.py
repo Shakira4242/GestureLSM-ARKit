@@ -50,7 +50,7 @@ def get_args():
 
     # Training
     parser.add_argument('--batch_size', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=2e-4)
+    parser.add_argument('--lr', type=float, default=5e-5)  # Lower LR for stable training
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--commit_weight', type=float, default=0.02)
     parser.add_argument('--vel_weight', type=float, default=0.1)
@@ -58,6 +58,10 @@ def get_args():
     # Output
     parser.add_argument('--out_dir', type=str, default='./outputs/vqvae_bvh/')
     parser.add_argument('--save_every', type=int, default=20)
+
+    # Performance
+    parser.add_argument('--num_workers', type=int, default=8,
+                        help='Dataloader workers (set to ~vCPU/3)')
 
     return parser.parse_args()
 
@@ -91,7 +95,8 @@ def main():
     print("Loading dataset...")
     train_dataset = BEATNormalizedDataset(data_args, split='train')
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                               shuffle=True, num_workers=4, drop_last=True)
+                               shuffle=True, num_workers=args.num_workers,
+                               drop_last=True, pin_memory=True)
 
     print(f"Dataset: {len(train_dataset)} samples")
 
