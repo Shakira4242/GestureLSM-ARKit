@@ -17,7 +17,7 @@ echo "GestureLSM BVH + ARKit Training Pipeline"
 echo "=========================================="
 
 # =============================================================================
-# Configuration - OPTIMIZED FOR H100 SXM 80GB + 26 vCPU
+# Configuration - AUTO-SCALES for 1x to 8x H100
 # =============================================================================
 # Speakers: Use "$(seq 1 30)" for all 30 speakers
 BEAT_SPEAKERS="1 2 3 4"
@@ -26,17 +26,19 @@ BEAT_SPEAKERS="1 2 3 4"
 VQVAE_EPOCHS=300             # Was 100, bump for better reconstruction
 GENERATOR_EPOCHS=1000        # Was 500, more epochs = smoother motion
 
-# Batch sizes - MAXED for H100 80GB VRAM
-VQVAE_BATCH_SIZE=512         # Was 256, H100 can easily handle 512
-GENERATOR_BATCH_SIZE=384     # Was 256, transformer limited by sequence length
+# Batch sizes - PER GPU (total = batch_size * num_gpus with DDP)
+VQVAE_BATCH_SIZE=256         # Per GPU, safe for 80GB VRAM
+GENERATOR_BATCH_SIZE=128     # Per GPU, transformer needs more memory
 
 # Paths
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 CACHE_PATH="./datasets/beat_cache/beat_bvh_arkit/"
 
-# Workers - match vCPU count (26 cores on your pod)
-NUM_CACHE_WORKERS=24         # Leave 2 cores for system
-NUM_DATA_WORKERS=8           # Dataloader workers
+# Workers - auto-scale based on vCPU count
+VCPU_COUNT=$(nproc)
+NUM_CACHE_WORKERS=$((VCPU_COUNT - 4))  # Leave some for system
+NUM_DATA_WORKERS=$((VCPU_COUNT / 8))   # ~1 worker per 8 vCPUs
+echo "Detected $VCPU_COUNT vCPUs: cache_workers=$NUM_CACHE_WORKERS, data_workers=$NUM_DATA_WORKERS"
 
 # Multi-GPU settings
 NUM_GPUS=$(nvidia-smi -L | wc -l)  # Auto-detect GPU count
