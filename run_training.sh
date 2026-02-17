@@ -27,8 +27,8 @@ VQVAE_EPOCHS=300             # Good convergence, diminishing returns after
 GENERATOR_EPOCHS=400         # Reasonable quality within budget
 
 # Batch sizes - PER GPU (total = batch_size * num_gpus with DDP)
-VQVAE_BATCH_SIZE=256         # Per GPU, safe for 80GB VRAM
-GENERATOR_BATCH_SIZE=96      # Per GPU, conservative for A100
+VQVAE_BATCH_SIZE=512         # Per GPU, A100 80GB can handle more
+GENERATOR_BATCH_SIZE=192     # Per GPU, doubled for A100
 
 # Paths
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
