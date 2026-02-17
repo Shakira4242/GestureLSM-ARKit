@@ -132,23 +132,29 @@ fi
 
 echo "Dataset ready!"
 
-# Step 1.5: Build cache FAST with parallel processing
+# Step 1.5: Build cache FAST with parallel processing (skip if exists)
 echo ""
-echo "[Step 1.5] Building cache with parallel processing..."
-echo "Speakers: $BEAT_SPEAKERS"
-echo "Workers: $NUM_CACHE_WORKERS"
+echo "[Step 1.5] Checking cache..."
 
-python build_cache_fast.py \
-    --data_path "$DATASET_PATH" \
-    --cache_path "$CACHE_PATH" \
-    --speakers $BEAT_SPEAKERS \
-    --workers $NUM_CACHE_WORKERS
+if [ -f "$CACHE_PATH/train_cache.pkl" ]; then
+    echo "Cache already exists at $CACHE_PATH/train_cache.pkl - SKIPPING rebuild"
+else
+    echo "Building cache with parallel processing..."
+    echo "Speakers: $BEAT_SPEAKERS"
+    echo "Workers: $NUM_CACHE_WORKERS"
 
-if [ ! -f "$CACHE_PATH/train_cache.pkl" ]; then
-    echo "ERROR: Cache building failed!"
-    exit 1
+    python build_cache_fast.py \
+        --data_path "$DATASET_PATH" \
+        --cache_path "$CACHE_PATH" \
+        --speakers $BEAT_SPEAKERS \
+        --workers $NUM_CACHE_WORKERS
+
+    if [ ! -f "$CACHE_PATH/train_cache.pkl" ]; then
+        echo "ERROR: Cache building failed!"
+        exit 1
+    fi
+    echo "Cache built successfully!"
 fi
-echo "Cache built successfully!"
 
 # Step 2: Train VQ-VAE for body
 echo ""
