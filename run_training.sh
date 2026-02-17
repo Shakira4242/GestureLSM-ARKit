@@ -22,13 +22,13 @@ echo "=========================================="
 # Speakers: Use "$(seq 1 30)" for all 30 speakers
 BEAT_SPEAKERS="1 2 3 4"
 
-# Epochs - increase for production quality
-VQVAE_EPOCHS=1000            # Extended for better reconstruction
-GENERATOR_EPOCHS=1000        # Was 500, more epochs = smoother motion
+# Epochs - optimized for budget ($30 on 2x A100)
+VQVAE_EPOCHS=300             # Good convergence, diminishing returns after
+GENERATOR_EPOCHS=400         # Reasonable quality within budget
 
 # Batch sizes - PER GPU (total = batch_size * num_gpus with DDP)
 VQVAE_BATCH_SIZE=256         # Per GPU, safe for 80GB VRAM
-GENERATOR_BATCH_SIZE=128     # Per GPU, transformer needs more memory
+GENERATOR_BATCH_SIZE=96      # Per GPU, conservative for A100
 
 # Paths
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
