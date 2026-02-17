@@ -164,7 +164,8 @@ python train_vqvae_bvh.py \
     --speakers $BEAT_SPEAKERS \
     --data_path "$DATASET_PATH" \
     --cache_path "$CACHE_PATH" \
-    --num_workers $NUM_DATA_WORKERS
+    --num_workers $NUM_DATA_WORKERS \
+    --resume
 
 # Check if VQ-VAE body training succeeded
 if [ ! -f "./outputs/vqvae_bvh/body/best.pth" ]; then
@@ -183,7 +184,8 @@ python train_vqvae_bvh.py \
     --speakers $BEAT_SPEAKERS \
     --data_path "$DATASET_PATH" \
     --cache_path "$CACHE_PATH" \
-    --num_workers $NUM_DATA_WORKERS
+    --num_workers $NUM_DATA_WORKERS \
+    --resume
 
 # Check if VQ-VAE face training succeeded
 if [ ! -f "./outputs/vqvae_bvh/face/best.pth" ]; then
@@ -223,7 +225,19 @@ print(f"  - Batch size: $GENERATOR_BATCH_SIZE")
 print(f"  - Epochs: $GENERATOR_EPOCHS")
 EOF
 
-python train.py --config configs/shortcut_bvh_arkit.yaml
+# Find latest checkpoint for resume
+LATEST_CKPT=""
+if [ -d "./outputs/shortcut_bvh_arkit" ]; then
+    LATEST_CKPT=$(ls -d ./outputs/shortcut_bvh_arkit/checkpoint_* 2>/dev/null | sort -t_ -k2 -n | tail -1)
+fi
+
+if [ -n "$LATEST_CKPT" ] && [ -f "$LATEST_CKPT/ckpt.pth" ]; then
+    echo "Resuming from checkpoint: $LATEST_CKPT"
+    python train.py --config configs/shortcut_bvh_arkit.yaml --resume "$LATEST_CKPT"
+else
+    echo "Starting generator training from scratch"
+    python train.py --config configs/shortcut_bvh_arkit.yaml
+fi
 
 echo ""
 echo "=========================================="

@@ -63,6 +63,12 @@ def get_args():
     parser.add_argument('--num_workers', type=int, default=8,
                         help='Dataloader workers (set to ~vCPU/3)')
 
+    # Resume training
+    parser.add_argument('--resume', action='store_true',
+                        help='Auto-resume from best.pth if it exists')
+    parser.add_argument('--resume_from', type=str, default=None,
+                        help='Specific checkpoint path to resume from')
+
     return parser.parse_args()
 
 
@@ -146,10 +152,35 @@ def main():
     # Loss
     recon_loss_fn = nn.SmoothL1Loss()
 
-    # Training loop
+    # Resume from checkpoint if requested or if checkpoint exists
+    start_epoch = 1
     best_loss = float('inf')
 
-    for epoch in range(1, args.epochs + 1):
+    # Determine checkpoint path
+    resume_path = None
+    if args.resume_from:
+        resume_path = args.resume_from
+    elif args.resume:
+        # Auto-find best checkpoint
+        best_path = os.path.join(out_dir, 'best.pth')
+        if os.path.exists(best_path):
+            resume_path = best_path
+
+    if resume_path and os.path.exists(resume_path):
+        print(f"Loading checkpoint from {resume_path}...")
+        checkpoint = torch.load(resume_path, map_location=device)
+        model.load_state_dict(checkpoint['net'])
+        if 'optimizer' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        best_loss = checkpoint.get('loss', float('inf'))
+        print(f"Resumed from epoch {checkpoint.get('epoch', '?')}, best_loss={best_loss:.4f}")
+        print(f"Continuing from epoch {start_epoch} to {args.epochs}")
+    elif args.resume or args.resume_from:
+        print(f"No checkpoint found to resume from, starting fresh")
+
+    # Training loop
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         total_loss = 0
         total_recon = 0
