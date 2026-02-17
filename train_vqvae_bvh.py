@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
-Train VQ-VAE for BVH + ARKit format.
+Train VQ-VAE for BVH + ARKit format with multi-GPU support.
 Body: 225 dims (75 joints × 3 Euler angles, normalized to -180..180)
 Face: 51 dims (ARKit blendshapes)
 
 Usage:
+    # Single GPU
     python train_vqvae_bvh.py --body_part body --epochs 100
-    python train_vqvae_bvh.py --body_part face --epochs 100
+
+    # Multi-GPU (4x H100)
+    torchrun --nproc_per_node=4 train_vqvae_bvh.py --body_part body --epochs 100 --ddp
 """
 import os
 import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 import numpy as np
 
@@ -69,6 +75,10 @@ def get_args():
     parser.add_argument('--resume_from', type=str, default=None,
                         help='Specific checkpoint path to resume from')
 
+    # Multi-GPU / DDP
+    parser.add_argument('--ddp', action='store_true',
+                        help='Enable DistributedDataParallel for multi-GPU training')
+
     return parser.parse_args()
 
 
@@ -77,14 +87,47 @@ class Args:
     pass
 
 
+def setup_ddp():
+    """Initialize distributed training."""
+    dist.init_process_group(backend='nccl')
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    torch.cuda.set_device(local_rank)
+    return rank, world_size, local_rank
+
+
+def cleanup_ddp():
+    """Clean up distributed training."""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
 def main():
     args = get_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Device: {device}")
+
+    # DDP setup
+    if args.ddp:
+        rank, world_size, local_rank = setup_ddp()
+        device = torch.device(f'cuda:{local_rank}')
+        is_main = (rank == 0)
+    else:
+        rank, world_size, local_rank = 0, 1, 0
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        is_main = True
+
+    if is_main:
+        print(f"Device: {device}")
+        if args.ddp:
+            print(f"DDP enabled: {world_size} GPUs")
 
     # Output directory
     out_dir = os.path.join(args.out_dir, args.body_part)
-    os.makedirs(out_dir, exist_ok=True)
+    if is_main:
+        os.makedirs(out_dir, exist_ok=True)
+
+    if args.ddp:
+        dist.barrier()  # Wait for rank 0 to create directory
 
     # Create dataloader args
     data_args = Args()
@@ -98,13 +141,25 @@ def main():
     data_args.new_cache = args.new_cache
 
     # Load dataset
-    print("Loading dataset...")
+    if is_main:
+        print("Loading dataset...")
     train_dataset = BEATNormalizedDataset(data_args, split='train')
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                               shuffle=True, num_workers=args.num_workers,
-                               drop_last=True, pin_memory=True)
 
-    print(f"Dataset: {len(train_dataset)} samples")
+    # DataLoader with optional DistributedSampler
+    if args.ddp:
+        sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
+                                   sampler=sampler, num_workers=args.num_workers,
+                                   drop_last=True, pin_memory=True)
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
+                                   shuffle=True, num_workers=args.num_workers,
+                                   drop_last=True, pin_memory=True)
+
+    if is_main:
+        print(f"Dataset: {len(train_dataset)} samples")
+        if args.ddp:
+            print(f"Batch size per GPU: {args.batch_size}, Total: {args.batch_size * world_size}")
 
     # Determine input dimension based on body part
     if args.body_part == 'body':
@@ -117,10 +172,10 @@ def main():
         dim_pose = 276  # body + face
         slice_start, slice_end = 0, 276
 
-    print(f"Training {args.body_part}: {dim_pose} dims")
+    if is_main:
+        print(f"Training {args.body_part}: {dim_pose} dims")
 
     # Create VQ-VAE model
-    # Create a simple args namespace for RVQVAE
     vq_args = Args()
     vq_args.num_quantizers = 6
     vq_args.shared_codebook = False
@@ -143,7 +198,15 @@ def main():
         args.vq_norm
     ).to(device)
 
-    print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
+    if is_main:
+        print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
+
+    # Wrap model in DDP
+    if args.ddp:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+        model_unwrapped = model.module
+    else:
+        model_unwrapped = model
 
     # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
@@ -167,26 +230,34 @@ def main():
             resume_path = best_path
 
     if resume_path and os.path.exists(resume_path):
-        print(f"Loading checkpoint from {resume_path}...")
+        if is_main:
+            print(f"Loading checkpoint from {resume_path}...")
         checkpoint = torch.load(resume_path, map_location=device)
-        model.load_state_dict(checkpoint['net'])
+        model_unwrapped.load_state_dict(checkpoint['net'])
         if 'optimizer' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch = checkpoint.get('epoch', 0) + 1
         best_loss = checkpoint.get('loss', float('inf'))
-        print(f"Resumed from epoch {checkpoint.get('epoch', '?')}, best_loss={best_loss:.4f}")
-        print(f"Continuing from epoch {start_epoch} to {args.epochs}")
+        if is_main:
+            print(f"Resumed from epoch {checkpoint.get('epoch', '?')}, best_loss={best_loss:.4f}")
+            print(f"Continuing from epoch {start_epoch} to {args.epochs}")
     elif args.resume or args.resume_from:
-        print(f"No checkpoint found to resume from, starting fresh")
+        if is_main:
+            print(f"No checkpoint found to resume from, starting fresh")
 
     # Training loop
     for epoch in range(start_epoch, args.epochs + 1):
         model.train()
+
+        # Set epoch for distributed sampler
+        if args.ddp:
+            train_loader.sampler.set_epoch(epoch)
+
         total_loss = 0
         total_recon = 0
         total_commit = 0
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}", disable=not is_main)
         for batch in pbar:
             motion = batch['motion'].to(device)  # (B, T, 276)
 
@@ -195,7 +266,6 @@ def main():
 
             # Forward
             output = model(motion)
-            # Decoder already outputs (B, T, dim) - see encdec.py line 128
             pred_motion = output['rec_pose']
             commit_loss = output['commit_loss']
 
@@ -219,10 +289,11 @@ def main():
             total_recon += recon_loss.item()
             total_commit += commit_loss.item()
 
-            pbar.set_postfix({
-                'loss': f'{loss.item():.4f}',
-                'recon': f'{recon_loss.item():.4f}',
-            })
+            if is_main:
+                pbar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'recon': f'{recon_loss.item():.4f}',
+                })
 
         scheduler.step()
 
@@ -230,55 +301,62 @@ def main():
         avg_recon = total_recon / len(train_loader)
         avg_commit = total_commit / len(train_loader)
 
-        print(f"Epoch {epoch}: loss={avg_loss:.4f}, recon={avg_recon:.4f}, commit={avg_commit:.4f}")
+        if is_main:
+            print(f"Epoch {epoch}: loss={avg_loss:.4f}, recon={avg_recon:.4f}, commit={avg_commit:.4f}")
 
-        # Save checkpoint
-        if epoch % args.save_every == 0 or avg_loss < best_loss:
-            if avg_loss < best_loss:
-                best_loss = avg_loss
-                save_path = os.path.join(out_dir, 'best.pth')
-            else:
-                save_path = os.path.join(out_dir, f'epoch_{epoch}.pth')
+        # Save checkpoint (only on main process)
+        if is_main:
+            if epoch % args.save_every == 0 or avg_loss < best_loss:
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    save_path = os.path.join(out_dir, 'best.pth')
+                else:
+                    save_path = os.path.join(out_dir, f'epoch_{epoch}.pth')
 
-            torch.save({
-                'epoch': epoch,
-                'net': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'loss': avg_loss,
-                'args': vars(args),
-            }, save_path)
-            print(f"Saved: {save_path}")
+                torch.save({
+                    'epoch': epoch,
+                    'net': model_unwrapped.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'loss': avg_loss,
+                    'args': vars(args),
+                }, save_path)
+                print(f"Saved: {save_path}")
 
     # Save final (only if it doesn't exist - never overwrite)
-    final_path = os.path.join(out_dir, 'final.pth')
-    if not os.path.exists(final_path):
-        torch.save({
-            'epoch': args.epochs,
-            'net': model.state_dict(),
-            'loss': avg_loss,
-            'args': vars(args),
-        }, final_path)
-        print(f"Saved: {final_path}")
-    else:
-        print(f"Skipping final.pth save - already exists")
-
-    # Save normalization stats for inference (only if they don't exist - never overwrite)
-    stats = train_dataset.get_norm_stats()
-    stats_files = [
-        ('body_mean.npy', stats['body_mean']),
-        ('body_std.npy', stats['body_std']),
-        ('face_mean.npy', stats['face_mean']),
-        ('face_std.npy', stats['face_std']),
-    ]
-    for fname, data in stats_files:
-        fpath = os.path.join(out_dir, fname)
-        if not os.path.exists(fpath):
-            np.save(fpath, data)
-            print(f"Saved: {fpath}")
+    if is_main:
+        final_path = os.path.join(out_dir, 'final.pth')
+        if not os.path.exists(final_path):
+            torch.save({
+                'epoch': args.epochs,
+                'net': model_unwrapped.state_dict(),
+                'loss': avg_loss,
+                'args': vars(args),
+            }, final_path)
+            print(f"Saved: {final_path}")
         else:
-            print(f"Skipping {fname} - already exists")
+            print(f"Skipping final.pth save - already exists")
 
-    print("Done!")
+        # Save normalization stats for inference (only if they don't exist - never overwrite)
+        stats = train_dataset.get_norm_stats()
+        stats_files = [
+            ('body_mean.npy', stats['body_mean']),
+            ('body_std.npy', stats['body_std']),
+            ('face_mean.npy', stats['face_mean']),
+            ('face_std.npy', stats['face_std']),
+        ]
+        for fname, data in stats_files:
+            fpath = os.path.join(out_dir, fname)
+            if not os.path.exists(fpath):
+                np.save(fpath, data)
+                print(f"Saved: {fpath}")
+            else:
+                print(f"Skipping {fname} - already exists")
+
+        print("Done!")
+
+    # Cleanup
+    if args.ddp:
+        cleanup_ddp()
 
 
 if __name__ == "__main__":

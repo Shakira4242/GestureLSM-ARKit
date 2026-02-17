@@ -38,6 +38,14 @@ CACHE_PATH="./datasets/beat_cache/beat_bvh_arkit/"
 NUM_CACHE_WORKERS=24         # Leave 2 cores for system
 NUM_DATA_WORKERS=8           # Dataloader workers
 
+# Multi-GPU settings
+NUM_GPUS=$(nvidia-smi -L | wc -l)  # Auto-detect GPU count
+USE_DDP=false
+if [ "$NUM_GPUS" -gt 1 ]; then
+    USE_DDP=true
+    echo "Detected $NUM_GPUS GPUs - enabling DDP"
+fi
+
 # HuggingFace token for faster downloads (optional but recommended)
 # Set HF_TOKEN env var before running: export HF_TOKEN="your_token_here"
 
@@ -163,15 +171,28 @@ echo "Speakers: $BEAT_SPEAKERS"
 echo "Batch size: $VQVAE_BATCH_SIZE"
 echo "Epochs: $VQVAE_EPOCHS"
 
-python train_vqvae_bvh.py \
-    --body_part body \
-    --epochs $VQVAE_EPOCHS \
-    --batch_size $VQVAE_BATCH_SIZE \
-    --speakers $BEAT_SPEAKERS \
-    --data_path "$DATASET_PATH" \
-    --cache_path "$CACHE_PATH" \
-    --num_workers $NUM_DATA_WORKERS \
-    --resume
+if [ "$USE_DDP" = true ]; then
+    torchrun --nproc_per_node=$NUM_GPUS train_vqvae_bvh.py \
+        --body_part body \
+        --epochs $VQVAE_EPOCHS \
+        --batch_size $VQVAE_BATCH_SIZE \
+        --speakers $BEAT_SPEAKERS \
+        --data_path "$DATASET_PATH" \
+        --cache_path "$CACHE_PATH" \
+        --num_workers $NUM_DATA_WORKERS \
+        --resume \
+        --ddp
+else
+    python train_vqvae_bvh.py \
+        --body_part body \
+        --epochs $VQVAE_EPOCHS \
+        --batch_size $VQVAE_BATCH_SIZE \
+        --speakers $BEAT_SPEAKERS \
+        --data_path "$DATASET_PATH" \
+        --cache_path "$CACHE_PATH" \
+        --num_workers $NUM_DATA_WORKERS \
+        --resume
+fi
 
 # Check if VQ-VAE body training succeeded
 if [ ! -f "./outputs/vqvae_bvh/body/best.pth" ]; then
@@ -183,15 +204,28 @@ echo "VQ-VAE body training complete!"
 # Step 3: Train VQ-VAE for face
 echo ""
 echo "[Step 3] Training VQ-VAE for face (51D ARKit blendshapes)..."
-python train_vqvae_bvh.py \
-    --body_part face \
-    --epochs $VQVAE_EPOCHS \
-    --batch_size $VQVAE_BATCH_SIZE \
-    --speakers $BEAT_SPEAKERS \
-    --data_path "$DATASET_PATH" \
-    --cache_path "$CACHE_PATH" \
-    --num_workers $NUM_DATA_WORKERS \
-    --resume
+if [ "$USE_DDP" = true ]; then
+    torchrun --nproc_per_node=$NUM_GPUS train_vqvae_bvh.py \
+        --body_part face \
+        --epochs $VQVAE_EPOCHS \
+        --batch_size $VQVAE_BATCH_SIZE \
+        --speakers $BEAT_SPEAKERS \
+        --data_path "$DATASET_PATH" \
+        --cache_path "$CACHE_PATH" \
+        --num_workers $NUM_DATA_WORKERS \
+        --resume \
+        --ddp
+else
+    python train_vqvae_bvh.py \
+        --body_part face \
+        --epochs $VQVAE_EPOCHS \
+        --batch_size $VQVAE_BATCH_SIZE \
+        --speakers $BEAT_SPEAKERS \
+        --data_path "$DATASET_PATH" \
+        --cache_path "$CACHE_PATH" \
+        --num_workers $NUM_DATA_WORKERS \
+        --resume
+fi
 
 # Check if VQ-VAE face training succeeded
 if [ ! -f "./outputs/vqvae_bvh/face/best.pth" ]; then
