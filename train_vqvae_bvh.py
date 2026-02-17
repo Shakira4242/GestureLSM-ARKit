@@ -249,21 +249,34 @@ def main():
             }, save_path)
             print(f"Saved: {save_path}")
 
-    # Save final
-    torch.save({
-        'epoch': args.epochs,
-        'net': model.state_dict(),
-        'loss': avg_loss,
-        'args': vars(args),
-    }, os.path.join(out_dir, 'final.pth'))
+    # Save final (only if it doesn't exist - never overwrite)
+    final_path = os.path.join(out_dir, 'final.pth')
+    if not os.path.exists(final_path):
+        torch.save({
+            'epoch': args.epochs,
+            'net': model.state_dict(),
+            'loss': avg_loss,
+            'args': vars(args),
+        }, final_path)
+        print(f"Saved: {final_path}")
+    else:
+        print(f"Skipping final.pth save - already exists")
 
-    # Save normalization stats for inference
+    # Save normalization stats for inference (only if they don't exist - never overwrite)
     stats = train_dataset.get_norm_stats()
-    np.save(os.path.join(out_dir, 'body_mean.npy'), stats['body_mean'])
-    np.save(os.path.join(out_dir, 'body_std.npy'), stats['body_std'])
-    np.save(os.path.join(out_dir, 'face_mean.npy'), stats['face_mean'])
-    np.save(os.path.join(out_dir, 'face_std.npy'), stats['face_std'])
-    print(f"Saved normalization stats to {out_dir}")
+    stats_files = [
+        ('body_mean.npy', stats['body_mean']),
+        ('body_std.npy', stats['body_std']),
+        ('face_mean.npy', stats['face_mean']),
+        ('face_std.npy', stats['face_std']),
+    ]
+    for fname, data in stats_files:
+        fpath = os.path.join(out_dir, fname)
+        if not os.path.exists(fpath):
+            np.save(fpath, data)
+            print(f"Saved: {fpath}")
+        else:
+            print(f"Skipping {fname} - already exists")
 
     print("Done!")
 
