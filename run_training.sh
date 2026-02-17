@@ -23,7 +23,7 @@ echo "=========================================="
 BEAT_SPEAKERS="1 2 3 4"
 
 # Epochs - increase for production quality
-VQVAE_EPOCHS=300             # Was 100, bump for better reconstruction
+VQVAE_EPOCHS=1000            # Extended for better reconstruction
 GENERATOR_EPOCHS=1000        # Was 500, more epochs = smoother motion
 
 # Batch sizes - PER GPU (total = batch_size * num_gpus with DDP)
