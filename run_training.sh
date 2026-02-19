@@ -34,9 +34,9 @@ GENERATOR_BATCH_SIZE=192     # Per GPU, doubled for A100
 DATASET_PATH="./datasets/BEAT/beat_english_v0.2.1/beat_english_v0.2.1"
 CACHE_PATH="./datasets/beat_cache/beat_bvh_arkit/"
 
-# Workers - auto-scale based on vCPU count
+# Workers - auto-scale based on vCPU count (capped to avoid thread limits)
 VCPU_COUNT=$(nproc)
-NUM_CACHE_WORKERS=$((VCPU_COUNT - 4))  # Leave some for system
+NUM_CACHE_WORKERS=$(( VCPU_COUNT > 32 ? 32 : VCPU_COUNT - 4 ))  # Cap at 32
 NUM_DATA_WORKERS=$((VCPU_COUNT / 8))   # ~1 worker per 8 vCPUs
 echo "Detected $VCPU_COUNT vCPUs: cache_workers=$NUM_CACHE_WORKERS, data_workers=$NUM_DATA_WORKERS"
 
