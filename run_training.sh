@@ -20,11 +20,11 @@ echo "=========================================="
 # Configuration - AUTO-SCALES for 1x to 8x H100
 # =============================================================================
 # Speakers: Use "$(seq 1 30)" for all 30 speakers
-BEAT_SPEAKERS="$(seq 1 10)"
+BEAT_SPEAKERS="$(seq 1 30)"
 
-# Epochs - optimized for budget ($30 on 2x A100)
-VQVAE_EPOCHS=300             # Good convergence, diminishing returns after
-GENERATOR_EPOCHS=400         # Reasonable quality within budget
+# Epochs - matching paper settings
+VQVAE_EPOCHS=300             # VQ-VAE converges well at 300
+GENERATOR_EPOCHS=1000        # Paper uses 1000 epochs
 
 # Batch sizes - PER GPU (total = batch_size * num_gpus with DDP)
 VQVAE_BATCH_SIZE=512         # Per GPU, A100 80GB can handle more
