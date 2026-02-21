@@ -49,21 +49,27 @@ ARKIT_BLENDSHAPES = [
 
 
 def process_audio_to_mel(audio_path, audio_sr=16000, n_mels=128, pose_fps=30):
-    """Process audio file into mel spectrogram features matching training format."""
+    """Process audio file into mel spectrogram features matching training format.
+
+    IMPORTANT: Must match exactly what beat_normalized.py does during training:
+    - Resample to 18kHz
+    - hop_length=1200
+    - No power_to_db normalization
+    """
+    # Load at original sample rate first
     audio, sr = librosa.load(audio_path, sr=audio_sr)
 
-    # Compute mel spectrogram (same as training)
-    hop_length = audio_sr // pose_fps  # 16000/30 = 533
+    # Resample to 18kHz (matches training dataloader)
+    audio_18k = librosa.resample(audio, orig_sr=audio_sr, target_sr=18000)
+
+    # Compute mel spectrogram with EXACT same settings as training
+    # Training uses: sr=18000, hop_length=1200, n_mels=128
     mel = librosa.feature.melspectrogram(
-        y=audio, sr=audio_sr, n_mels=n_mels, hop_length=hop_length
+        y=audio_18k, sr=18000, hop_length=1200, n_mels=n_mels
     )
-    mel_db = librosa.power_to_db(mel, ref=np.max)
 
-    # Normalize to roughly [-1, 1] range
-    mel_db = (mel_db + 40) / 40  # Shift and scale
-
-    # Transpose to [T, n_mels]
-    mel_features = mel_db.T
+    # Match training: swapaxes and drop last frame, NO power_to_db
+    mel_features = np.swapaxes(mel[..., :-1], -1, -2).astype(np.float32)
 
     duration = len(audio) / audio_sr
     return mel_features, duration, len(audio)
